@@ -475,8 +475,20 @@ class App:
             raise ApiError(404, "rotina não encontrada")
         if not routine["room_ids"]:
             raise ApiError(409, "rotina sem cômodos: disparo nativo ainda não descoberto (P3)")
-        # P3 pendente: usa a limpeza por cômodos com os cômodos da rotina
-        return {"fallback": "clean_rooms", **self.gw.clean_rooms(routine["room_ids"])}
+        # P3 pendente: usa a limpeza por cômodos com os cômodos da rotina. A ação 2/16 não leva o modo: o robô
+        # usaria o modo global (2/4), que pode estar com pano numa rotina "só aspirar". Grava antes o modo da rotina.
+        modes = sorted(set(routine["mop"]))
+        if len(modes) > 1:
+            raise ApiError(409, "esta rotina usa modos diferentes por cômodo; rode pelo app Xiaomi Home")
+        if modes and modes[0] not in catalog.ENUM_PT["2/4"]:
+            raise ApiError(409, f"modo {modes[0]} da rotina desconhecido; rode pelo app Xiaomi Home")
+        self.gw.check_start()
+        mode = modes[0] if modes else None
+        if mode is not None and self.gw.cache.get("2/4") != mode:
+            res = self.gw.set("2/4", mode)
+            if not isinstance(res, dict) or res.get("code") != 0:
+                raise ApiError(502, f"não consegui ajustar o modo da rotina (2/4 = {mode}): {res}")
+        return {"fallback": "clean_rooms", "mode": mode, **self.gw.clean_rooms(routine["room_ids"])}
 
     def action(self, name, **_):
         if name not in catalog.SIMPLE_ACTIONS:

@@ -186,6 +186,44 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.fake.calls[-1][1]["in"], [{"piid": 15, "value": "3,8"}])
         self.assertEqual(self.call("POST", "/api/clean/rooms", {"ids": []})[0], 400)
 
+    def _custom(self, cid):
+        self.fake.calls.clear()
+        st, res = self.call("POST", f"/api/clean/custom/{cid}")
+        return st, res, [(m, p) for m, p in self.fake.calls if m in ("set_properties", "action")]
+
+    def test_custom_applies_routine_mode(self):
+        old = self.gw.cache.get("2/42")
+        labels = [{"id": 11, "name": "Só aspirar", "mop": [1], "room_ids": [3, 8], "user_cfg": []},
+                  {"id": 12, "name": "Misturada", "mop": [1, 3], "room_ids": [3, 8], "user_cfg": []},
+                  {"id": 13, "name": "Sem modo", "mop": [], "room_ids": [3], "user_cfg": []}]
+        self.gw.cache.update({"2/42": json.dumps({"user_labels": labels}), "2/4": 3})
+        self.fake.values["2/4"] = 3
+        try:
+            # modo diferente: grava 2/4 ANTES de mandar limpar os cômodos
+            st, res, sent = self._custom(11)
+            self.assertEqual((st, res["mode"]), (200, 1))
+            self.assertEqual([m for m, _ in sent], ["set_properties", "action"])
+            self.assertEqual((sent[0][1][0]["siid"], sent[0][1][0]["piid"], sent[0][1][0]["value"]), (2, 4, 1))
+            self.assertEqual(sent[1][1]["in"], [{"piid": 15, "value": "3,8"}])
+            # já no modo certo: não grava de novo
+            st, _, sent = self._custom(11)
+            self.assertEqual((st, [m for m, _ in sent]), (200, ["action"]))
+            # modos diferentes por cômodo: recusa sem mexer em nada
+            st, res, sent = self._custom(12)
+            self.assertEqual((st, sent), (409, []))
+            self.assertIn("app Xiaomi Home", res["error"])
+            # sem modo na rotina: comportamento antigo
+            st, res, sent = self._custom(13)
+            self.assertEqual((st, res["mode"], [m for m, _ in sent]), (200, None, ["action"]))
+            # robô ocupado: não muda o modo
+            self.gw.cache.update({"2/4": 3, "2/2": 12})
+            self.fake.values["2/4"] = 3
+            st, _, sent = self._custom(11)
+            self.assertEqual((st, sent), (409, []))
+            self.assertEqual(self.gw.cache.get("2/4"), 3)
+        finally:
+            self.gw.cache.update({"2/42": old, "2/2": 2})
+
     def test_actions_blocked(self):
         self.gw.cache.update({"2/2": 12})
         try:

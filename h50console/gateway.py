@@ -157,6 +157,10 @@ class Gateway:
             self.bus.publish("command", {"command": label, "code": code, "error": err})
             self.poke.set()
 
+    def check_start(self) -> None:
+        """Levanta CommandBlocked se o robô não pode sair da base agora (antes de mudar ajustes para uma limpeza)."""
+        self._check_start("start")
+
     def run(self, name: str, source: str = "ui"):
         """Ação simples pelo nome (start, home, dust, locate…)."""
         if name not in catalog.SIMPLE_ACTIONS:
