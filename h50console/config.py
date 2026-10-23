@@ -42,6 +42,7 @@ class Config:
     viewer_password: str = ""          # H50_VIEWER_PASSWORD: senha do perfil somente leitura (Docker)
     metrics_token: str = ""            # H50_METRICS_TOKEN: libera /metrics (Prometheus) com 'Authorization: Bearer <token>'
     allowed_hosts: tuple = ()          # H50_ALLOWED_HOSTS: nomes extras aceitos no Host (só vale em localhost sem proxy)
+    cloud_country: str = ""            # H50_CLOUD_COUNTRY: servidor da nuvem Xiaomi (us, de, sg...); vazio/auto = descobre
     # migração de instalações de um robô só (usados apenas se não houver robots.json)
     ip: str = ""
     token: str = ""
@@ -54,6 +55,11 @@ class Config:
         token = e.get("H50_TOKEN", "")
         if token and len(token) != 32:
             raise SystemExit("H50_TOKEN deve ter 32 caracteres hexadecimais")
+        from .cloud import COUNTRIES
+        country = e.get("H50_CLOUD_COUNTRY", "").strip().lower()
+        country = "" if country == "auto" else country
+        if country and country not in COUNTRIES:
+            raise SystemExit(f"H50_CLOUD_COUNTRY deve ser auto ou um de: {', '.join(COUNTRIES)}")
         return cls(
             data_dir=Path(e.get("H50_DATA_DIR", "data")),
             host=e.get("H50_HOST", cls.host),
@@ -65,6 +71,7 @@ class Config:
             cookie_secure=_bool(e.get("H50_COOKIE_SECURE")),
             viewer_password=e.get("H50_VIEWER_PASSWORD", ""), metrics_token=e.get("H50_METRICS_TOKEN", ""),
             allowed_hosts=tuple(h.strip().lower() for h in e.get("H50_ALLOWED_HOSTS", "").split(",") if h.strip()),
+            cloud_country=country,
             ip=e.get("H50_IP", ""), token=token, device_name=e.get("H50_NAME", ""),
         )
 

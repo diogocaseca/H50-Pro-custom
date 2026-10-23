@@ -33,7 +33,7 @@ def _passphrase(confirm: bool = False) -> str:
 
 
 def _fleet(cfg: Config, start_threads: bool) -> Fleet:
-    cloud = CloudService(cfg.data_dir / "cloud-session.json", cfg.data_dir / "map")
+    cloud = CloudService(cfg.data_dir / "cloud-session.json", cfg.data_dir / "map", country=cfg.cloud_country)
     fleet = Fleet(cfg.data_dir, cloud, timeout=cfg.timeout, start_threads=start_threads)
     fleet.load(seed=cfg.seed())
     return fleet
@@ -57,6 +57,8 @@ def serve(cfg: Config) -> int:
     names = ", ".join(f"{r.cfg.name} ({r.cfg.transport})" for r in fleet.robots.values()) or "nenhum (cadastre na interface)"
     log.info("H50 Console %s | dados em %s | robôs: %s", __version__, cfg.data_dir, names)
     log.info("painel em http://%s:%s  (Ctrl+C para sair)", cfg.host, cfg.port)
+    if cfg.cloud_country:
+        log.info("nuvem Xiaomi: servidor fixo '%s' (H50_CLOUD_COUNTRY)", cfg.cloud_country)
     if auth.enabled and auth.setup_code:
         log.warning("PRIMEIRO ACESSO: abra o painel e crie a senha com o código  %s", auth.setup_code)
     elif not auth.enabled:

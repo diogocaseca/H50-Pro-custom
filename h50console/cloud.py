@@ -93,8 +93,9 @@ def _enc_signature(path: str, signed_nonce: str, params: dict) -> str:
 # Sessão
 # ---------------------------------------------------------------------------
 class Cloud:
-    def __init__(self, session: dict | None = None):
+    def __init__(self, session: dict | None = None, country: str = ""):
         self.s = session or {}
+        self.forced_country = country   # H50_CLOUD_COUNTRY: usa só este servidor (vazio = descobre sozinho)
         self.jar = http.cookiejar.CookieJar()
         self.http = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
 
@@ -211,7 +212,7 @@ class Cloud:
     # -- API ---------------------------------------------------------------------
     def api(self, path: str, data: dict, country: str | None = None) -> dict:
         """POST cifrado (RC4) em https://<país>.api.io.mi.com/app<path>. Devolve o JSON decifrado."""
-        country = country or self.s.get("country", "us")
+        country = country or self.forced_country or self.s.get("country", "us")
         host = "api.io.mi.com" if country == "cn" else f"{country}.api.io.mi.com"
         url = f"https://{host}/app{path}"
         nonce = _nonce()
@@ -239,7 +240,7 @@ class Cloud:
 
     def find_device(self, did: str) -> dict:
         """Procura o robô nos servidores; grava o país encontrado na sessão."""
-        for c in ([self.s["country"]] if self.s.get("country") else []) + COUNTRIES:
+        for c in self.countries():
             try:
                 res = self.api("/home/device_list", {"getVirtualModel": False, "getHuamiDevices": 0}, c)
             except CloudError:
@@ -248,7 +249,13 @@ class Cloud:
                 if str(dev.get("did")) == str(did):
                     self.s["country"] = c
                     return dev
-        raise CloudError(f"robô did={did} não encontrado em {COUNTRIES}")
+        raise CloudError(f"robô did={did} não encontrado em {self.countries()}")
+
+    def countries(self) -> list[str]:
+        """Servidores a consultar, em ordem: só o fixo, se houver; senão o da sessão e depois os demais."""
+        if self.forced_country:
+            return [self.forced_country]
+        return list(dict.fromkeys(([self.s["country"]] if self.s.get("country") else []) + COUNTRIES))
 
     def map_url(self, obj_name: str) -> str:
         """URL temporária do arquivo do mapa. Tenta a rota _pro (modelos novos) e a clássica."""
@@ -272,9 +279,10 @@ class Cloud:
 # Serviço para o app web: login por QR em segundo plano + download do mapa
 # ---------------------------------------------------------------------------
 class CloudService:
-    def __init__(self, session_file: Path = SESSION_FILE, map_dir: Path = Path("data/map")):
+    def __init__(self, session_file: Path = SESSION_FILE, map_dir: Path = Path("data/map"), country: str = ""):
         self.session_file = session_file
         self.map_dir = map_dir
+        self.country = country                   # H50_CLOUD_COUNTRY (vazio = descobre o servidor sozinho)
         self.lock = threading.Lock()
         self.state = "ok" if session_file.exists() else "none"   # none | waiting | ok | error
         self.error: str | None = None
@@ -287,6 +295,7 @@ class CloudService:
     def _cloud(self) -> "Cloud":
         if self._c is None:
             self._c = Cloud.load(self.session_file)
+            self._c.forced_country = self.country
         return self._c
 
     def api(self, path: str, data: dict, did: str | None = None) -> dict:
@@ -307,7 +316,7 @@ class CloudService:
         """Lista CRUA (traz token, localização e IP público: nunca devolver ao navegador como está)."""
         with self._api_lock:
             c = self._cloud()
-            for country in dict.fromkeys(([c.s["country"]] if c.s.get("country") else []) + COUNTRIES):
+            for country in c.countries():
                 try:
                     res = c.api("/home/device_list", {"getVirtualModel": False, "getHuamiDevices": 0}, country)
                 except CloudError:
@@ -344,7 +353,7 @@ class CloudService:
                 "login_url": (self.qr or {}).get("login_url")}
         if self.session_file.exists():
             s = json.loads(self.session_file.read_text(encoding="utf-8"))
-            info.update({"user_id": s.get("user_id"), "country": s.get("country"), "login_at": s.get("login_at")})
+            info.update({"user_id": s.get("user_id"), "country": self.country or s.get("country"), "login_at": s.get("login_at")})
         return info
 
     def start_qr(self, on_done=None) -> dict:

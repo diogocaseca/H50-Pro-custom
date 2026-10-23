@@ -160,5 +160,78 @@ class SessionFile(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600)
 
 
+class CloudCountry(unittest.TestCase):
+    """H50_CLOUD_COUNTRY: servidor da nuvem fixo, para contas com aparelhos em servidores diferentes."""
+
+    def _service(self, d, session_country, forced):
+        import json
+        from pathlib import Path
+        from h50console.cloud import CloudService
+        f = Path(d) / "cloud-session.json"
+        f.write_text(json.dumps({"user_id": "1", "ssecurity": "eA==", "service_token": "t",
+                                 "country": session_country}), encoding="utf-8")
+        return CloudService(f, Path(d) / "map", country=forced)
+
+    def _fake_api(self, lists):
+        asked = []
+
+        def api(cloud, path, data, country=None):
+            asked.append(country or cloud.forced_country or cloud.s.get("country"))
+            return {"result": {"list": lists.get(asked[-1], [])}}
+        return asked, api
+
+    def test_forced_country_is_the_only_server_used(self):
+        import tempfile
+        from unittest import mock
+        from h50console.cloud import Cloud
+        asked, api = self._fake_api({"us": [{"did": "1", "token": "a"}], "de": [{"did": "42", "token": "b"}]})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(Cloud, "api", api):
+            svc = self._service(d, "us", "de")
+            self.assertEqual([x["did"] for x in svc.devices()], ["42"])
+            self.assertEqual(svc.credentials("42")["token"], "b")
+            self.assertEqual(set(asked), {"de"})
+            self.assertEqual(svc.status()["country"], "de")
+            self.assertEqual(svc._cloud().find_device("42")["did"], "42")
+            with self.assertRaises(Exception):
+                svc._cloud().find_device("1")        # está no "us", mas o servidor fixo é o "de"
+
+    def test_without_forced_country_nothing_changes(self):
+        import tempfile
+        from unittest import mock
+        from h50console.cloud import COUNTRIES, Cloud
+        asked, api = self._fake_api({"de": [{"did": "42"}]})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(Cloud, "api", api):
+            svc = self._service(d, "sg", "")
+            self.assertEqual(svc._cloud().countries(), ["sg"] + [c for c in COUNTRIES if c != "sg"])
+            self.assertEqual([x["did"] for x in svc.devices()], ["42"])
+            self.assertEqual(asked[:2], ["sg", "us"])
+            self.assertEqual(svc.status()["country"], "de")   # o primeiro servidor com aparelhos fica gravado
+
+    def test_api_host_follows_the_forced_country(self):
+        from unittest import mock
+        from h50console.cloud import Cloud, CloudError
+        urls = []
+
+        def req(self, url, **_):
+            urls.append(url)
+            raise CloudError("fim")
+        c = Cloud({"user_id": "1", "ssecurity": "eA==", "service_token": "t", "country": "us"}, country="de")
+        with mock.patch.object(Cloud, "_req", req):
+            for country in (None, "sg"):
+                with self.assertRaises(CloudError):
+                    c.api("/home/device_list", {}, country)
+        self.assertEqual([u.split("/")[2] for u in urls], ["de.api.io.mi.com", "sg.api.io.mi.com"])
+
+    def test_config_reads_and_validates_the_country(self):
+        import os
+        from unittest import mock
+        from h50console.config import Config
+        for value, expected in (("", ""), ("auto", ""), (" DE ", "de"), ("i2", "i2")):
+            with mock.patch.dict(os.environ, {"H50_CLOUD_COUNTRY": value}):
+                self.assertEqual(Config.from_env("/nao/existe/.env").cloud_country, expected)
+        with mock.patch.dict(os.environ, {"H50_CLOUD_COUNTRY": "br"}), self.assertRaises(SystemExit):
+            Config.from_env("/nao/existe/.env")
+
+
 if __name__ == "__main__":
     unittest.main()
