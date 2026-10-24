@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
-from . import catalog
+from . import catalog, decoders
 from .miio import MiioClient, MiioDeviceError, MiioError
 
 # soma dos itens de um lote; deixa folga para o envelope {"id":…,"result":[…]} e o padding AES
@@ -167,6 +167,10 @@ class H50:
         if not ids:
             raise ValueError("informe ao menos um cômodo")
         return self.action("2/16", [",".join(map(str, ids))])
+
+    def clean_zones(self, zones: list) -> dict:
+        """Ação 2/37 (start-zone-sweep) com as zonas em mm. Formato do parâmetro em teste (ver decoders.zone_param)."""
+        return self.action("2/37", [decoders.zone_param(zones)])
 
     def reset_consumable(self, item: str) -> dict:
         s, a = catalog.CONSUMABLES[item]

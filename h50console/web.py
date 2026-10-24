@@ -47,7 +47,7 @@ MAX_JSON = 1024 * 1024            # nenhum corpo JSON legítimo do app passa dis
 VIEWER_GET = re.compile(
     r"/api/(app|robots|stream|cloud/status)"
     r"|/api/r/[\w-]+/(stream|health|state|rooms|custom|furniture|settings|consumables|history|history/path|schedules"
-    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status)")
+    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status|zones/captured)")
 # único POST do visualizador: atualizar o mapa a partir da nuvem (só baixa; não mexe no robô)
 VIEWER_POST = re.compile(r"/api/r/[\w-]+/cloud/map")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
@@ -89,6 +89,8 @@ class App:
             ("GET", r"/api/furniture", self.furniture),
             ("POST", r"/api/clean/rooms", self.clean_rooms),
             ("POST", r"/api/clean/custom/(\d+)", self.clean_custom),
+            ("GET", r"/api/zones/captured", self.zones_captured),
+            ("POST", r"/api/clean/zones", self.clean_zones),
             ("POST", r"/api/actions/([\w-]+)", self.action),
             ("GET", r"/api/settings", self.settings),
             ("PUT", r"/api/settings/([\d-]+)", self.put_setting),
@@ -489,6 +491,34 @@ class App:
             if not isinstance(res, dict) or res.get("code") != 0:
                 raise ApiError(502, f"não consegui ajustar o modo da rotina (2/4 = {mode}): {res}")
         return {"fallback": "clean_rooms", "mode": mode, **self.gw.clean_rooms(routine["room_ids"])}
+
+    def zones_captured(self, **_):
+        """Zonas das últimas limpezas por zona feitas pelo app Xiaomi Home (o robô as informa no 2/40)."""
+        out, seen = [], set()
+        for row in self.store.prop_history("2/40", 2000):
+            zones = decoders.captured_zones(row["new_value"])
+            key = json.dumps(zones)
+            if not zones or key in seen:
+                continue
+            seen.add(key)
+            custom = decoders.running_custom(row["new_value"])
+            sizes = [[round((max(z[0::2]) - min(z[0::2])) / 1000, 2), round((max(z[1::2]) - min(z[1::2])) / 1000, 2)]
+                     for z in zones]
+            out.append({"ts": row["ts"], "zones": zones, "sizes": sizes, "routine": custom["name"] if custom else None})
+            if len(out) >= 10:
+                break
+        return out
+
+    # teste da limpeza por zona: só com o robô parado na base (carregando, carga completa ou base trabalhando na carga)
+    ZONE_TEST_DOCKED = {2, 9, 14}
+
+    def clean_zones(self, body, **_):
+        zones = (body or {}).get("zones")
+        decoders.zone_param(zones)                                # valida antes de qualquer coisa (400)
+        status = self.gw.cache.get("2/2")
+        if status not in self.ZONE_TEST_DOCKED:
+            raise ApiError(409, f"teste da limpeza por zona só com o robô na base ({catalog.label('2/2', status)})")
+        return self.gw.clean_zones(zones)
 
     def action(self, name, **_):
         if name not in catalog.SIMPLE_ACTIONS:

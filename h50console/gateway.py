@@ -172,6 +172,10 @@ class Gateway:
         self._check_start("start")
         return self._command("action:2/16", ids, self.dev.clean_rooms, ids, source=source)
 
+    def clean_zones(self, zones: list, source: str = "ui"):
+        self._check_start("start")
+        return self._command("action:2/37", zones, self.dev.clean_zones, zones, source=source)
+
     def set(self, key: str, value, source: str = "ui"):
         """Grava uma prop e relê para confirmar (o robô pode ajustar o valor).
 

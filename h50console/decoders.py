@@ -120,6 +120,42 @@ def running_custom(raw) -> dict | None:
     return {"id": ud.get("id"), "name": ud.get("name", ""), "params": params, "zones": zones}
 
 
+ZONE_MIN_MM, ZONE_MAX_MM, ZONE_MAX_COUNT = 300, 30000, 10
+
+
+def zone_region(z) -> list[int]:
+    """Zona do 2/40 ([x1,y1,…,x4,y4]) ou retângulo [x1,y1,x2,y2] (mm) -> cantos no formato da ação 2/37:
+    [esq,cima, esq,baixo, dir,baixo, dir,cima] (o mesmo do xiaomi-vac nos modelos irmãos, ov21gl e afins)."""
+    if not isinstance(z, (list, tuple)) or len(z) not in (4, 8) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in z):
+        raise ValueError(f"zona inválida: {z!r} (esperado [x1,y1,x2,y2] ou 4 cantos, em mm)")
+    xs, ys = [round(v) for v in z[0::2]], [round(v) for v in z[1::2]]
+    left, right, bottom, top = min(xs), max(xs), min(ys), max(ys)
+    for size in (right - left, top - bottom):
+        if not ZONE_MIN_MM <= size <= ZONE_MAX_MM:
+            raise ValueError(f"zona de {size} mm: o lado precisa ter entre {ZONE_MIN_MM} e {ZONE_MAX_MM} mm")
+    return [left, top, left, bottom, right, bottom, right, top]
+
+
+def zone_param(zones) -> str:
+    """Lista de zonas -> parâmetro (piid 12) da ação 2/37 start-zone-sweep. FORMATO EM TESTE no H50 Pro."""
+    if not isinstance(zones, list) or not 1 <= len(zones) <= ZONE_MAX_COUNT:
+        raise ValueError(f"informe de 1 a {ZONE_MAX_COUNT} zonas")
+    return json.dumps([{"blocks_region": zone_region(z), "blocks_attr": 0} for z in zones], separators=(",", ":"))
+
+
+def captured_zones(raw) -> list[list] | None:
+    """2/40 de uma limpeza por zona (ou rotina por zonas) -> as zonas, como o robô as informou; senão None."""
+    d = parse_json(raw, {})
+    if not isinstance(d, dict):
+        return None
+    zones = d.get("zones")
+    if not zones:
+        custom = running_custom(raw)
+        zones = custom["zones"] if custom else None
+    return [list(z) for z in zones] if isinstance(zones, list) and zones else None
+
+
 def furnitures(raw) -> list[dict]:
     """2/102 -> [{"id", "type", "rid"}]. Tipos (1220, 1400, 1740) e rid 248 ainda não mapeados."""
     return [{"id": f.get("id"), "type": f.get("type"), "rid": f.get("rid")}

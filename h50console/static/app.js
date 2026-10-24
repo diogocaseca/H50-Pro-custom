@@ -152,6 +152,53 @@
     $("#sub-station").textContent = BASE_MODE[base.mode] || "Pronta";
   }
 
+  // teste da limpeza por zona (ação 2/37): formato ainda não confirmado no H50 Pro
+  const ZONE_DOCKED = new Set([2, 9, 14]);
+  let zoneTesting = false;
+  async function renderZoneTest() {
+    const list = await api("GET", "/api/zones/captured").catch(() => []);
+    const docked = ZONE_DOCKED.has(state?.status);
+    $("#zone-list").replaceChildren(...(list.length ? list.map((z) => {
+      const btn = el("button", { className: "play", textContent: "▶", disabled: zoneTesting || !docked,
+        title: docked ? "Testar: limpar esta zona" : "Só com o robô na base" });
+      btn.onclick = () => confirmAction("O robô vai sair da base para limpar a zona. Fique por perto para parar se precisar.",
+        () => zoneTest(z.zones));
+      const sizes = z.sizes.map(([w, h]) => `${w} × ${h} m`).join(", ");
+      return el("div", { className: "list-row" },
+        el("div", {}, el("div", { textContent: z.routine ? `Rotina "${z.routine}"` : `${z.zones.length} zona(s)` }),
+          el("div", { className: "muted small", textContent: `${fmtDate(z.ts)} · ${sizes}` })),
+        btn);
+    }) : [el("p", { className: "muted small", textContent: "Nenhuma zona ainda. Rode uma limpeza por zona (ou a rotina) pelo app Xiaomi Home." })]));
+  }
+
+  async function zoneTest(zones) {
+    const out = $("#zone-out"), goHome = $("#zone-home").checked;
+    const log = (line) => { out.hidden = false; out.textContent += line + "\n"; };
+    out.textContent = "";
+    zoneTesting = true; renderZoneTest();
+    try {
+      const res = await api("POST", "/api/clean/zones", { zones });
+      log(`resposta do robô: ${JSON.stringify(res)}`);
+      if (res.code !== 0) { log("O robô recusou o formato. Nada foi iniciado."); return; }
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const st = await api("GET", "/api/state");
+        const v = st.values || {};
+        log(`${(i + 1) * 3} s: ${st.status_label} (${st.status}) · tipo 2/5 = ${v["2/5"]} · 2/40 = ${String(v["2/40"] ?? "").slice(0, 160)}`);
+        if (v["2/5"] === 2 && String(v["2/40"]).includes("zones")) {
+          log("FUNCIONOU: o robô aceitou e está limpando a zona (formato aceito).");
+          if (goHome) { await api("POST", "/api/actions/home"); log("Mandei voltar à base."); }
+          return;
+        }
+      }
+      log("Em 60 s o robô não confirmou uma limpeza por zona. Confira onde ele está e, se precisar, mande voltar.");
+    } catch (e) {
+      log(`erro: ${e.message}`);
+    } finally {
+      zoneTesting = false; renderZoneTest();
+    }
+  }
+
   let roomsCache = null;
   async function renderHomeLists() {
     const [custom, sched] = await Promise.all([api("GET", "/api/custom"), api("GET", "/api/schedules")]);
@@ -163,6 +210,7 @@
         el("div", {}, el("div", { textContent: c.name }), el("div", { className: "muted small", textContent: c.rooms.join(", ") || "zonas definidas no app" })),
         play);
     }) : [el("p", { className: "muted small", textContent: "Nenhuma rotina. Crie no app Xiaomi Home." })]));
+    renderZoneTest();
     const on = sched.filter((s) => s.on).length;
     $("#sub-sched").textContent = `${sched.length} limpeza(s) programada(s)${sched.length ? `, ${on} ativa(s)` : ""}`;
     $("#btn-sched").onclick = () => openSheet("Limpeza programada", [

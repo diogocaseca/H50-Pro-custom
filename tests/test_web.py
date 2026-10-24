@@ -224,6 +224,34 @@ class WebTests(unittest.TestCase):
         finally:
             self.gw.cache.update({"2/42": old, "2/2": 2})
 
+    def test_zone_clean(self):
+        from datetime import datetime, timezone
+        sofa = [1000, -500, 1000, 700, 2500, 700, 2500, -500]
+        self.store.save_changes({"2/40": ("", json.dumps({"zones": [sofa], "clean_mode": 1}))},
+                                datetime(2026, 10, 24, 9, 0, tzinfo=timezone.utc))
+        self.store.save_changes({"2/40": ("", json.dumps({"clean_mode": 1}))})
+        _, captured = self.call("GET", "/api/zones/captured")
+        self.assertEqual(captured[0]["zones"], [sofa])
+        self.assertEqual(captured[0]["sizes"], [[1.5, 1.2]])
+        self.gw.cache.update({"2/2": 9})
+        try:
+            self.fake.calls.clear()
+            st, res = self.call("POST", "/api/clean/zones", {"zones": [sofa]})
+            self.assertEqual((st, res["code"]), (200, 0))
+            method, params = self.fake.calls[-1]
+            self.assertEqual((method, params["siid"], params["aiid"]), ("action", 2, 37))
+            self.assertEqual(json.loads(params["in"][0]["value"]),
+                             [{"blocks_region": [1000, 700, 1000, -500, 2500, -500, 2500, 700], "blocks_attr": 0}])
+            self.assertEqual(params["in"][0]["piid"], 12)
+            for bad in ({}, {"zones": []}, {"zones": [[1, 2, 3]]}, {"zones": [[0, 0, 100, 100]]}):   # 100 mm: pequena
+                self.assertEqual(self.call("POST", "/api/clean/zones", bad)[0], 400, bad)
+            self.gw.cache.update({"2/2": 4})                      # fora da base: recusa sem enviar
+            self.fake.calls.clear()
+            self.assertEqual(self.call("POST", "/api/clean/zones", {"zones": [sofa]})[0], 409)
+            self.assertFalse([c for c in self.fake.calls if c[0] == "action"])
+        finally:
+            self.gw.cache.update({"2/2": 2})
+
     def test_actions_blocked(self):
         self.gw.cache.update({"2/2": 12})
         try:

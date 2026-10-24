@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timezone
 
@@ -75,6 +76,24 @@ class Decoders(unittest.TestCase):
         self.assertEqual(r["map_uid"], 1)
         self.assertEqual({x["id"]: x["name"] for x in r["rooms"]}[4], "Quarto de criança")
         self.assertEqual(set(decoders.room_surfaces(self.v["23/1"])), {3, 4, 5, 6, 7, 8})
+
+    def test_zones(self):
+        self.assertEqual(decoders.zone_region([2500, 700, 1000, -500]), [1000, 700, 1000, -500, 2500, -500, 2500, 700])
+        self.assertEqual(decoders.zone_region([1000, -500, 1000, 700, 2500, 700, 2500, -500]),
+                         [1000, 700, 1000, -500, 2500, -500, 2500, 700])
+        for bad in ([1, 2, 3], [0, 0, 100, 900], [0, 0, 40000, 900], "x", [0, 0, True, 900]):
+            with self.assertRaises(ValueError):
+                decoders.zone_region(bad)
+        self.assertEqual(decoders.zone_param([[0, 0, 1000, 1000]]),
+                         '[{"blocks_region":[0,1000,0,0,1000,0,1000,1000],"blocks_attr":0}]')
+        with self.assertRaises(ValueError):
+            decoders.zone_param([[0, 0, 1000, 1000]] * 11)
+        z = [[1, 2, 3, 4, 5, 6, 7, 8]]
+        self.assertEqual(decoders.captured_zones(json.dumps({"zones": z})), z)
+        ud = {"user_define": {"id": 1, "name": "Pelos gatos", "user_data": [["mode", "mode_data"], [2, z]]}}
+        self.assertEqual(decoders.captured_zones(json.dumps(ud)), z)
+        self.assertIsNone(decoders.captured_zones('{"rooms": [3]}'))
+        self.assertIsNone(decoders.captured_zones(""))
 
     def test_custom_cleans(self):
         c = {x["name"]: x for x in decoders.custom_cleans(self.v["2/42"])}
