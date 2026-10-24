@@ -264,6 +264,20 @@ class WebTests(unittest.TestCase):
             self.assertEqual(self.call("PUT", f"/api/zones/{z['id']}", {"name": "Sala intenso"})[0], 409)
             self.assertEqual(self.call("PUT", f"/api/zones/{z['id']}", {"name": "Sofá"})[1]["name"], "Sofá")
             self.assertEqual([x["name"] for x in self.call("GET", "/api/zones")[1]], ["Sofá"])
+            # limite de zonas desenhadas (aba Configurações): vale para desenhar e salvar, não para o que já está salvo
+            three = [[0, 0, 900, 900], [1000, 0, 1900, 900], [2000, 0, 2900, 900], [3000, 0, 3900, 900]]
+            self.assertEqual(self.call("GET", "/api/zones/limit")[1], {"limit": 3})          # padrão
+            st, res = self.call("POST", "/api/clean/zones", {"zones": three})
+            self.assertEqual(st, 400)
+            self.assertIn("no máximo 3", res["error"])
+            self.assertEqual(self.call("PUT", "/api/zones/limit", {"limit": 2})[1], {"limit": 2})
+            self.assertEqual(self.call("POST", "/api/zones", {"name": "Três", "zones": three[:3]})[0], 400)
+            self.assertEqual(self.call("POST", "/api/clean/zones", {"zones": three[:2]})[0], 200)
+            for bad in (0, 11, "3", True, None):
+                self.assertEqual(self.call("PUT", "/api/zones/limit", {"limit": bad})[0], 400, bad)
+            self.call("PUT", "/api/zones/limit", {"limit": 3})
+            row = next(r for r in self.call("GET", "/api/settings")[1] if r["key"] == "zone_limit")   # tabela de ajustes
+            self.assertEqual((row["group"], row["value"], row["range"], row["local"]), ("Sistema", 3, [1, 10, 1], True))
             # limpar pela zona salva ou por coordenadas
             self.fake.calls.clear()
             self.assertEqual(self.call("POST", "/api/clean/zones", {"zone_id": z["id"]})[1]["code"], 0)

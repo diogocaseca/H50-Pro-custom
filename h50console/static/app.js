@@ -157,9 +157,10 @@
 
   let roomsCache = null;
   async function renderHomeLists() {
-    const [custom, sched, zones] = await Promise.all([api("GET", "/api/custom"), api("GET", "/api/schedules"),
-      api("GET", "/api/zones").catch(() => [])]);
+    const [custom, sched, zones, limit] = await Promise.all([api("GET", "/api/custom"), api("GET", "/api/schedules"),
+      api("GET", "/api/zones").catch(() => []), api("GET", "/api/zones/limit").catch(() => ({ limit: 3 }))]);
     savedZones = zones;
+    zoneLimit = limit.limit;
     if (zoneId && !savedZones.some((z) => z.id === zoneId)) { zoneSel = []; zoneId = null; toggleRefresh(); }
     $("#custom-list").replaceChildren(...(custom.length ? custom.map((c) => {
       const play = el("button", { className: "play", title: c.runnable ? `Executar ${c.name}` : c.reason, textContent: "▶",
@@ -226,12 +227,13 @@
   }
 
   // ---- zonas: desenhar no mapa, salvar com nome (admin) e limpar ----------------------------------------------
-  const ZONE_MIN = 300, ZONE_WARN = 700, ZONE_MAX = 10;
+  const ZONE_MIN = 300, ZONE_WARN = 700;
+  let zoneLimit = 3;                                        // aba Configurações (GET /api/zones/limit)
   function addZone(rect) {
     const [x1, y1, x2, y2] = rect, w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
     if (Math.min(w, h) < ZONE_MIN) return toast("Zona pequena demais: cada lado precisa ter ao menos 0,3 m.", true);
     if (zoneId) { zoneSel = []; zoneId = null; }                // editar uma zona salva vira uma seleção nova
-    if (zoneSel.length >= ZONE_MAX) return toast(`No máximo ${ZONE_MAX} zonas por limpeza.`, true);
+    if (zoneSel.length >= zoneLimit) return toast(`No máximo ${zoneLimit} zona(s) por limpeza (limite da aba Configurações).`, true);
     areaSel.clear();
     zoneSel.push(rect);
     if (Math.min(w, h) < ZONE_WARN) toast("Zona com menos de 0,7 m de lado: o robô pode recusar.");
@@ -469,7 +471,9 @@
     const save = async (value) => {
       status.className = "saving"; status.textContent = " salvando…";
       try {
-        const res = await setProp(r.key, value);
+        const res = r.local     // ajuste do painel (não é prop do robô)
+          ? await api("PUT", "/api/zones/limit", { limit: value }).then((x) => { zoneLimit = x.limit; return { code: 0, value: x.limit }; })
+          : await setProp(r.key, value);
         status.className = "ok"; status.textContent = res.code === 0 ? " ok" : ` código ${res.code}`;
         if (state) state.values[r.key] = res.value ?? value;
       } catch (e) { status.className = "err"; status.textContent = " " + e.message; }
@@ -629,7 +633,7 @@
       Table.render(host, [
         { key: "label", label: "Ajuste" },
         { key: "control", label: "Valor", filter: false, sort: false, render: control },
-        { key: "key", label: "siid/piid" },
+        { key: "key", label: "siid/piid", render: (r) => r.local ? "painel" : r.key },
       ], items, { group: (r) => r.group });
     },
 

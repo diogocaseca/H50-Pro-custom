@@ -14,8 +14,31 @@ from .store import Store, iso
 
 SAVED_KEY = "zones_saved"            # [{"id", "name", "zones": [[x1,y1,x2,y2], ...]}]
 LEARNED_KEY = "routine_zones"        # {"<id da rotina>": {"name", "zones", "ts"}}
+LIMIT_KEY = "zone_limit"             # quantos retângulos dá para desenhar por limpeza (aba Configurações)
+LIMIT_DEFAULT = 3
 MAX_SAVED = 30
 MAX_NAME = 40
+
+
+def draw_limit(store: Store) -> int:
+    """Limite de zonas desenhadas por limpeza e por zona salva (1 a 10). Não vale para as rotinas do app Xiaomi Home
+    nem para zonas salvas antes de baixar o limite."""
+    try:
+        return min(decoders.ZONE_MAX_COUNT, max(1, int(store.get_setting(LIMIT_KEY, LIMIT_DEFAULT))))
+    except (TypeError, ValueError):
+        return LIMIT_DEFAULT
+
+
+def set_draw_limit(store: Store, value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= decoders.ZONE_MAX_COUNT:
+        raise ZoneError(f"o limite precisa ser um número de 1 a {decoders.ZONE_MAX_COUNT}")
+    store.set_setting(LIMIT_KEY, value)
+    return value
+
+
+def check_count(store: Store, rects) -> None:
+    if isinstance(rects, list) and len(rects) > draw_limit(store):
+        raise ZoneError(f"no máximo {draw_limit(store)} zona(s) por limpeza (limite da aba Configurações)")
 
 
 class ZoneError(ValueError):
@@ -107,6 +130,7 @@ def check_name(name, store: Store, routine_names: list[str], ignore_id: str | No
 def add(store: Store, name, rects, routine_names: list[str]) -> dict:
     name = check_name(name, store, routine_names)
     decoders.zone_param(rects)                                       # valida (ValueError -> 400)
+    check_count(store, rects)
     zones = saved(store)
     if len(zones) >= MAX_SAVED:
         raise ZoneError(f"limite de {MAX_SAVED} zonas salvas")

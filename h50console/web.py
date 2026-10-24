@@ -47,7 +47,7 @@ MAX_JSON = 1024 * 1024            # nenhum corpo JSON legítimo do app passa dis
 VIEWER_GET = re.compile(
     r"/api/(app|robots|stream|cloud/status)"
     r"|/api/r/[\w-]+/(stream|health|state|rooms|custom|furniture|settings|consumables|history|history/path|schedules"
-    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status|zones)")
+    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status|zones|zones/limit)")
 # único POST do visualizador: atualizar o mapa a partir da nuvem (só baixa; não mexe no robô)
 VIEWER_POST = re.compile(r"/api/r/[\w-]+/cloud/map")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
@@ -91,6 +91,8 @@ class App:
             ("POST", r"/api/clean/custom/(\d+)", self.clean_custom),
             ("POST", r"/api/clean/zones", self.clean_zones),
             ("GET", r"/api/zones", self.zones_list),
+            ("GET", r"/api/zones/limit", self.zone_limit),
+            ("PUT", r"/api/zones/limit", self.put_zone_limit),
             ("POST", r"/api/zones", self.zone_add),
             ("PUT", r"/api/zones/([0-9a-f]{8})", self.zone_rename),
             ("DELETE", r"/api/zones/([0-9a-f]{8})", self.zone_delete),
@@ -237,6 +239,12 @@ class App:
             else:
                 item["type"] = "text"
             out.append(item)
+        # ajuste do próprio painel (não é prop do robô): limite de zonas desenhadas, no grupo Sistema
+        limit = {"key": "zone_limit", "group": "Sistema", "label": "Limite de zonas desenhadas por limpeza",
+                 "value": zones.draw_limit(self.store), "format": "uint8", "type": "range",
+                 "range": [1, decoders.ZONE_MAX_COUNT, 1], "local": True}
+        last = max((i for i, item in enumerate(out) if item["group"] == "Sistema"), default=len(out) - 1)
+        out.insert(last + 1, limit)
         return out
 
     def consumables(self, **_):
@@ -505,6 +513,10 @@ class App:
             rects = zone["zones"]
         else:
             rects = body.get("zones")
+            try:
+                zones.check_count(self.store, rects)              # zonas desenhadas: limite da aba Configurações
+            except zones.ZoneError as ex:
+                raise ApiError(400, str(ex)) from ex
         decoders.zone_param(rects)                                # valida antes de qualquer coisa (400)
         return self.gw.clean_zones(rects)
 
@@ -517,6 +529,17 @@ class App:
 
     def zones_list(self, **_):
         return zones.saved(self.store)
+
+    def zone_limit(self, **_):
+        return {"limit": zones.draw_limit(self.store)}
+
+    def put_zone_limit(self, body, **_):
+        try:
+            limit = zones.set_draw_limit(self.store, (body or {}).get("limit"))
+        except zones.ZoneError as ex:
+            raise ApiError(400, str(ex)) from ex
+        self._zones_changed()
+        return {"limit": limit}
 
     def zone_add(self, body, **_):
         body = body or {}
