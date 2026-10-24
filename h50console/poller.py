@@ -21,7 +21,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from . import catalog, decoders
+from . import catalog, decoders, zones
 from .gateway import Gateway
 from .miio import MiioError
 from .store import Store, iso as store_iso
@@ -118,6 +118,9 @@ class Poller:
         # nova limpeza saindo da base: começa a sessão do zero (antes de memorizar o que está nela)
         if "2/2" in changes and changes["2/2"][1] in CLEANING and changes["2/2"][0] not in catalog.ACTIVE_STATUS:
             self._session = {}
+        # rotina por zonas rodando (app Xiaomi Home): guarda as zonas dela para o painel poder rodá-la depois
+        if "2/40" in changes and zones.learn(self.store, changes["2/40"][1]):
+            self.gw.bus.publish("zones", {"learned": True})
         # memoriza tipo, cômodos e rotina só enquanto LIMPA: na volta à base (6) o 2/5 já foi zerado
         if cache.get("2/2") in CLEANING:
             _absorb(self._session, cache.get("2/5"), cache.get("2/40"))

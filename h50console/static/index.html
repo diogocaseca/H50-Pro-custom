@@ -45,6 +45,7 @@
         <div class="chips" id="chips"></div>
         <div id="home-map" data-maxh="0.62"></div>
         <p id="map-hover" class="muted small center">&nbsp;</p>
+        <div class="bar center" id="zone-tools" hidden></div>
         <div class="bar center"><button id="map-edit" hidden title="Monta um rascunho de móveis e paredes virtuais (não grava no robô)">Editar mapa (rascunho)</button></div>
         <div id="cloud-connect" hidden>
           <p class="muted">O mapa fica na nuvem Xiaomi. Conecte com o QR code: abra o <strong>Xiaomi Home</strong> no celular,
@@ -75,13 +76,6 @@
         <div class="card">
           <div class="card-label">Limpeza personalizada</div>
           <div id="custom-list"></div>
-        </div>
-        <div class="card" id="zone-test">
-          <div class="card-label">Teste: limpeza por zona</div>
-          <p class="muted small">Zonas das últimas limpezas por zona feitas pelo app Xiaomi Home. O teste manda o robô limpar a zona pela rede local; só com o robô na base.</p>
-          <div id="zone-list"></div>
-          <label class="small"><input type="checkbox" id="zone-home" checked> Voltar à base depois de confirmar</label>
-          <pre id="zone-out" class="out small" hidden></pre>
         </div>
         <button class="tile wide" id="btn-sched"><span class="tile-title">Limpeza programada</span><span class="tile-sub" id="sub-sched"></span><span class="chev">›</span></button>
       </div>

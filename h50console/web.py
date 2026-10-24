@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import catalog, dash, decoders
+from . import catalog, dash, decoders, zones
 from .auth import AuthError
 from .gateway import CommandBlocked, Gateway
 from .miio import MiioError
@@ -47,7 +47,7 @@ MAX_JSON = 1024 * 1024            # nenhum corpo JSON legítimo do app passa dis
 VIEWER_GET = re.compile(
     r"/api/(app|robots|stream|cloud/status)"
     r"|/api/r/[\w-]+/(stream|health|state|rooms|custom|furniture|settings|consumables|history|history/path|schedules"
-    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status|zones/captured)")
+    r"|export/cleanings\.csv|dash/(cleanings|timeline|coverage)|faults|map|app|cloud/status|zones)")
 # único POST do visualizador: atualizar o mapa a partir da nuvem (só baixa; não mexe no robô)
 VIEWER_POST = re.compile(r"/api/r/[\w-]+/cloud/map")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
@@ -89,8 +89,11 @@ class App:
             ("GET", r"/api/furniture", self.furniture),
             ("POST", r"/api/clean/rooms", self.clean_rooms),
             ("POST", r"/api/clean/custom/(\d+)", self.clean_custom),
-            ("GET", r"/api/zones/captured", self.zones_captured),
             ("POST", r"/api/clean/zones", self.clean_zones),
+            ("GET", r"/api/zones", self.zones_list),
+            ("POST", r"/api/zones", self.zone_add),
+            ("PUT", r"/api/zones/([0-9a-f]{8})", self.zone_rename),
+            ("DELETE", r"/api/zones/([0-9a-f]{8})", self.zone_delete),
             ("POST", r"/api/actions/([\w-]+)", self.action),
             ("GET", r"/api/settings", self.settings),
             ("PUT", r"/api/settings/([\d-]+)", self.put_setting),
@@ -197,8 +200,11 @@ class App:
     def custom(self, **_):
         names = {r["id"]: r["name"] for r in self.store.rooms()}
         out = []
+        learned = zones.learned(self.store)
         for c in decoders.custom_cleans(self.gw.cache.get("2/42")):
-            out.append({**c, "rooms": [names.get(i, str(i)) for i in c["room_ids"]]})
+            plan = zones.routine_plan(c, learned)
+            out.append({**c, "rooms": [names.get(i, str(i)) for i in c["room_ids"]], "runnable": plan["runnable"],
+                        "reason": plan["reason"], "zones": plan["zones"]})
         return out
 
     def furniture(self, **_):
@@ -475,50 +481,69 @@ class App:
         routine = next((c for c in decoders.custom_cleans(self.gw.cache.get("2/42")) if c["id"] == int(cid)), None)
         if routine is None:
             raise ApiError(404, "rotina não encontrada")
-        if not routine["room_ids"]:
-            raise ApiError(409, "rotina sem cômodos: disparo nativo ainda não descoberto (P3)")
-        # P3 pendente: usa a limpeza por cômodos com os cômodos da rotina. A ação 2/16 não leva o modo: o robô
-        # usaria o modo global (2/4), que pode estar com pano numa rotina "só aspirar". Grava antes o modo da rotina.
-        modes = sorted(set(routine["mop"]))
-        if len(modes) > 1:
-            raise ApiError(409, "esta rotina usa modos diferentes por cômodo; rode pelo app Xiaomi Home")
-        if modes and modes[0] not in catalog.ENUM_PT["2/4"]:
-            raise ApiError(409, f"modo {modes[0]} da rotina desconhecido; rode pelo app Xiaomi Home")
+        # P3 pendente (disparo nativo): limpa os cômodos (2/16) ou as zonas aprendidas (2/37) da rotina. Nenhuma das
+        # duas ações leva o modo: o robô usaria o modo global (2/4). Grava antes o modo da rotina.
+        plan = zones.routine_plan(routine, zones.learned(self.store))
+        if not plan["runnable"]:
+            raise ApiError(409, f'rotina "{routine["name"]}": {plan["reason"]}')
         self.gw.check_start()
-        mode = modes[0] if modes else None
+        mode = plan["mode"]
         if mode is not None and self.gw.cache.get("2/4") != mode:
             res = self.gw.set("2/4", mode)
             if not isinstance(res, dict) or res.get("code") != 0:
                 raise ApiError(502, f"não consegui ajustar o modo da rotina (2/4 = {mode}): {res}")
-        return {"fallback": "clean_rooms", "mode": mode, **self.gw.clean_rooms(routine["room_ids"])}
-
-    def zones_captured(self, **_):
-        """Zonas das últimas limpezas por zona feitas pelo app Xiaomi Home (o robô as informa no 2/40)."""
-        out, seen = [], set()
-        for row in self.store.prop_history("2/40", 2000):
-            zones = decoders.captured_zones(row["new_value"])
-            key = json.dumps(zones)
-            if not zones or key in seen:
-                continue
-            seen.add(key)
-            custom = decoders.running_custom(row["new_value"])
-            sizes = [[round((max(z[0::2]) - min(z[0::2])) / 1000, 2), round((max(z[1::2]) - min(z[1::2])) / 1000, 2)]
-                     for z in zones]
-            out.append({"ts": row["ts"], "zones": zones, "sizes": sizes, "routine": custom["name"] if custom else None})
-            if len(out) >= 10:
-                break
-        return out
-
-    # teste da limpeza por zona: só com o robô parado na base (carregando, carga completa ou base trabalhando na carga)
-    ZONE_TEST_DOCKED = {2, 9, 14}
+        if plan["zones"]:
+            return {"fallback": "clean_zones", "mode": mode, **self.gw.clean_zones(plan["zones"])}
+        return {"fallback": "clean_rooms", "mode": mode, **self.gw.clean_rooms(plan["rooms"])}
 
     def clean_zones(self, body, **_):
-        zones = (body or {}).get("zones")
-        decoders.zone_param(zones)                                # valida antes de qualquer coisa (400)
-        status = self.gw.cache.get("2/2")
-        if status not in self.ZONE_TEST_DOCKED:
-            raise ApiError(409, f"teste da limpeza por zona só com o robô na base ({catalog.label('2/2', status)})")
-        return self.gw.clean_zones(zones)
+        body = body or {}
+        if body.get("zone_id"):
+            zone = next((z for z in zones.saved(self.store) if z["id"] == body["zone_id"]), None)
+            if zone is None:
+                raise ApiError(404, "zona não encontrada")
+            rects = zone["zones"]
+        else:
+            rects = body.get("zones")
+        decoders.zone_param(rects)                                # valida antes de qualquer coisa (400)
+        return self.gw.clean_zones(rects)
+
+    # -- zonas com nome (salvar, renomear e apagar: só administrador) ----------------------------------------------
+    def _routine_names(self) -> list[str]:
+        return [c["name"] for c in decoders.custom_cleans(self.gw.cache.get("2/42"))]
+
+    def _zones_changed(self):
+        self.gw.bus.publish("zones", {"at": int(time.time())})
+
+    def zones_list(self, **_):
+        return zones.saved(self.store)
+
+    def zone_add(self, body, **_):
+        body = body or {}
+        try:
+            zone = zones.add(self.store, body.get("name"), body.get("zones"), self._routine_names())
+        except zones.ZoneError as ex:
+            raise ApiError(409 if ex.conflict else 400, str(ex)) from ex
+        self._zones_changed()
+        return zone
+
+    def zone_rename(self, zid, body, **_):
+        try:
+            zone = zones.rename(self.store, zid, (body or {}).get("name"), self._routine_names())
+        except zones.ZoneError as ex:
+            raise ApiError(409 if ex.conflict else 400, str(ex)) from ex
+        except KeyError as ex:
+            raise ApiError(404, "zona não encontrada") from ex
+        self._zones_changed()
+        return zone
+
+    def zone_delete(self, zid, **_):
+        try:
+            zones.delete(self.store, zid)
+        except KeyError as ex:
+            raise ApiError(404, "zona não encontrada") from ex
+        self._zones_changed()
+        return {"ok": True}
 
     def action(self, name, **_):
         if name not in catalog.SIMPLE_ACTIONS:

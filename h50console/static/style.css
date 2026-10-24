@@ -202,7 +202,7 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .4); }
 body.viewer #tabs a[href="#robos"], body.viewer #tabs a[href="#diagnostico"], body.viewer #tabs a[href="#manutencao"],
 body.viewer #tabs a[href="#laboratorio"], body.viewer .home-side, body.viewer #hist-sync, body.viewer #t-consumables button,
 body.viewer #t-settings, body.viewer #notify-card, body.viewer #viewer-card, body.viewer #sec-pw, body.viewer #sec-all,
-body.viewer #map-edit, body.viewer #onboarding, body.viewer #qr-start, body.viewer #cloud-connect .bar { display: none; }
+body.viewer #map-edit, body.viewer #zone-tools, body.viewer #onboarding, body.viewer #qr-start, body.viewer #cloud-connect .bar { display: none; }
 body.viewer .home { grid-template-columns: 1fr; }
 .badge-viewer { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2, rgba(128,128,128,.18)); }
 td button { white-space: nowrap; }
@@ -216,3 +216,5 @@ main:focus { outline: none; }
 .me-tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .me-changes { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
 .me-tools button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+#zone-tools { flex-wrap: wrap; gap: 6px; }
+.zone-dels { justify-content: flex-start; margin-top: 8px; }

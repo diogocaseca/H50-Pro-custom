@@ -144,18 +144,6 @@ def zone_param(zones) -> str:
     return json.dumps([{"blocks_region": zone_region(z), "blocks_attr": 0} for z in zones], separators=(",", ":"))
 
 
-def captured_zones(raw) -> list[list] | None:
-    """2/40 de uma limpeza por zona (ou rotina por zonas) -> as zonas, como o robô as informou; senão None."""
-    d = parse_json(raw, {})
-    if not isinstance(d, dict):
-        return None
-    zones = d.get("zones")
-    if not zones:
-        custom = running_custom(raw)
-        zones = custom["zones"] if custom else None
-    return [list(z) for z in zones] if isinstance(zones, list) and zones else None
-
-
 def furnitures(raw) -> list[dict]:
     """2/102 -> [{"id", "type", "rid"}]. Tipos (1220, 1400, 1740) e rid 248 ainda não mapeados."""
     return [{"id": f.get("id"), "type": f.get("type"), "rid": f.get("rid")}

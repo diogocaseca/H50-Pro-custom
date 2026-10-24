@@ -224,32 +224,64 @@ class WebTests(unittest.TestCase):
         finally:
             self.gw.cache.update({"2/42": old, "2/2": 2})
 
-    def test_zone_clean(self):
-        from datetime import datetime, timezone
+    def test_zones(self):
+        from h50console import zones
         sofa = [1000, -500, 1000, 700, 2500, 700, 2500, -500]
-        self.store.save_changes({"2/40": ("", json.dumps({"zones": [sofa], "clean_mode": 1}))},
-                                datetime(2026, 10, 24, 9, 0, tzinfo=timezone.utc))
-        self.store.save_changes({"2/40": ("", json.dumps({"clean_mode": 1}))})
-        _, captured = self.call("GET", "/api/zones/captured")
-        self.assertEqual(captured[0]["zones"], [sofa])
-        self.assertEqual(captured[0]["sizes"], [[1.5, 1.2]])
-        self.gw.cache.update({"2/2": 9})
+        ud = {"user_define": {"id": 1791744466, "name": "Pelos gatos", "user_data": [["mode", "mode_data"], [2, [sofa]]]}}
+        self.store.set_setting(zones.SAVED_KEY, [])
         try:
+            # rotina por zonas ainda não vista: ▶ desabilitado com o motivo, e o painel recusa
+            self.store._exec("DELETE FROM app_setting WHERE key=?", (zones.LEARNED_KEY,))
+            _, custom = self.call("GET", "/api/custom")
+            gatos = next(c for c in custom if c["name"] == "Pelos gatos")
+            self.assertFalse(gatos["runnable"])
+            self.assertIn("aprender as zonas", gatos["reason"])
+            self.assertEqual(self.call("POST", f"/api/clean/custom/{gatos['id']}")[0], 409)
+            # o robô roda a rotina pelo app: o poller aprende as zonas pelo 2/40
+            self.assertTrue(zones.learn(self.store, json.dumps(ud)))
+            self.assertFalse(zones.learn(self.store, json.dumps(ud)))            # sem mudança
+            _, custom = self.call("GET", "/api/custom")
+            gatos = next(c for c in custom if c["name"] == "Pelos gatos")
+            self.assertEqual((gatos["runnable"], gatos["zones"]), (True, [sofa]))
+            self.gw.cache.update({"2/4": 3}); self.fake.values["2/4"] = 3
             self.fake.calls.clear()
-            st, res = self.call("POST", "/api/clean/zones", {"zones": [sofa]})
-            self.assertEqual((st, res["code"]), (200, 0))
-            method, params = self.fake.calls[-1]
-            self.assertEqual((method, params["siid"], params["aiid"]), ("action", 2, 37))
-            self.assertEqual(json.loads(params["in"][0]["value"]),
+            st, res = self.call("POST", f"/api/clean/custom/{gatos['id']}")
+            self.assertEqual((st, res["fallback"], res["mode"]), (200, "clean_zones", 1))
+            sent = [(m, p) for m, p in self.fake.calls if m in ("set_properties", "action")]
+            self.assertEqual([m for m, _ in sent], ["set_properties", "action"])      # modo antes da zona
+            self.assertEqual((sent[1][1]["siid"], sent[1][1]["aiid"]), (2, 37))
+            self.assertEqual(json.loads(sent[1][1]["in"][0]["value"]),
                              [{"blocks_region": [1000, 700, 1000, -500, 2500, -500, 2500, 700], "blocks_attr": 0}])
-            self.assertEqual(params["in"][0]["piid"], 12)
-            for bad in ({}, {"zones": []}, {"zones": [[1, 2, 3]]}, {"zones": [[0, 0, 100, 100]]}):   # 100 mm: pequena
-                self.assertEqual(self.call("POST", "/api/clean/zones", bad)[0], 400, bad)
-            self.gw.cache.update({"2/2": 4})                      # fora da base: recusa sem enviar
+            # zonas com nome: nome único e diferente das rotinas
+            st, z = self.call("POST", "/api/zones", {"name": "  Frente  do sofá ", "zones": [[1000, -500, 2500, 700]]})
+            self.assertEqual((st, z["name"]), (200, "Frente do sofá"))
+            self.assertEqual(self.call("POST", "/api/zones", {"name": "frente do SOFÁ", "zones": [[0, 0, 900, 900]]})[0], 409)
+            st, res = self.call("POST", "/api/zones", {"name": "pelos gatos", "zones": [[0, 0, 900, 900]]})
+            self.assertEqual(st, 409)
+            self.assertIn("rotina", res["error"])
+            self.assertEqual(self.call("POST", "/api/zones", {"name": "", "zones": [[0, 0, 900, 900]]})[0], 400)
+            self.assertEqual(self.call("POST", "/api/zones", {"name": "x", "zones": [[0, 0, 100, 100]]})[0], 400)
+            self.assertEqual(self.call("PUT", f"/api/zones/{z['id']}", {"name": "Sala intenso"})[0], 409)
+            self.assertEqual(self.call("PUT", f"/api/zones/{z['id']}", {"name": "Sofá"})[1]["name"], "Sofá")
+            self.assertEqual([x["name"] for x in self.call("GET", "/api/zones")[1]], ["Sofá"])
+            # limpar pela zona salva ou por coordenadas
             self.fake.calls.clear()
-            self.assertEqual(self.call("POST", "/api/clean/zones", {"zones": [sofa]})[0], 409)
-            self.assertFalse([c for c in self.fake.calls if c[0] == "action"])
+            self.assertEqual(self.call("POST", "/api/clean/zones", {"zone_id": z["id"]})[1]["code"], 0)
+            self.assertEqual(self.fake.calls[-1][1]["aiid"], 37)
+            self.assertEqual(self.call("POST", "/api/clean/zones", {"zone_id": "ffffffff"})[0], 404)
+            for bad in ({}, {"zones": []}, {"zones": [[1, 2, 3]]}, {"zones": [[0, 0, 100, 100]]}):
+                self.assertEqual(self.call("POST", "/api/clean/zones", bad)[0], 400, bad)
+            self.gw.cache.update({"2/2": 12})                                  # base trabalhando: não sai
+            self.assertEqual(self.call("POST", "/api/clean/zones", {"zone_id": z["id"]})[0], 409)
+            self.gw.cache.update({"2/2": 2})
+            self.assertEqual(self.call("DELETE", f"/api/zones/{z['id']}")[0], 200)
+            self.assertEqual(self.call("DELETE", f"/api/zones/{z['id']}")[0], 404)
+            # importação do histórico (instalação que já tinha capturado a rotina antes desta versão)
+            self.store._exec("DELETE FROM app_setting WHERE key=?", (zones.LEARNED_KEY,))
+            self.store.save_changes({"2/40": ("", json.dumps(ud))})
+            self.assertEqual(zones.learned(self.store)["1791744466"]["zones"], [sofa])
         finally:
+            self.store.set_setting(zones.SAVED_KEY, [])
             self.gw.cache.update({"2/2": 2})
 
     def test_actions_blocked(self):

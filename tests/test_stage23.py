@@ -176,6 +176,8 @@ class PollerTests(unittest.TestCase):
             self.p.tick()
         rec = {r["stime"]: r for r in self.store.cleanings()}[1791747463]
         self.assertEqual((rec["sweep_type"], rec["raw_label"], rec["area_m2"]), (7, "custom:Pelos gatos", 1.67))
+        from h50console import zones                     # as zonas da rotina ficam aprendidas para o painel rodá-la
+        self.assertEqual(zones.learned(self.store)["1"]["zones"], [[0, 0, 1, 0, 1, 1, 0, 1]])
 
     def test_restart_mid_cleaning_reconstructs_from_db(self):
         # instância 1 vê o início de uma limpeza por zonas (sequência real de 11/10 16:47)

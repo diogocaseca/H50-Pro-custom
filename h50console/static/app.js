@@ -81,6 +81,7 @@
   // ---- estado compartilhado --------------------------------------------------------------
   let state = null, appInfo = null, settings = null, mapData = null, cloud = null, robots = [];
   const areaSel = new Set();                       // cômodos escolhidos em "Área" (vazio = casa inteira)
+  let zoneSel = [], zoneId = null, drawing = false, savedZones = [];   // zonas [x1,y1,x2,y2] (mm); zoneId = zona salva
   const V = (k) => state?.values?.[k];
   const CLEANING = new Set([4, 10, 16, 17]), PAUSED = new Set([5, 18]), RETURNING = new Set([6, 19, 20, 21, 24]);
   const BASE_MODE = { 0: "", 1: "Secando", 2: "Esvaziando o pó", 3: "Lavando o mop" };
@@ -138,6 +139,7 @@
   }
 
   function areaText() {
+    if (zoneSel.length) return zoneId ? savedZones.find((z) => z.id === zoneId)?.name || "Zona salva" : `${zoneSel.length} zona(s) desenhada(s)`;
     if (!areaSel.size) return "Casa inteira";
     const names = Object.fromEntries((mapData?.rooms || roomsCache || []).map((r) => [r.id, r.name]));
     return [...areaSel].map((id) => names[id] || id).join(", ");
@@ -152,65 +154,23 @@
     $("#sub-station").textContent = BASE_MODE[base.mode] || "Pronta";
   }
 
-  // teste da limpeza por zona (ação 2/37): formato ainda não confirmado no H50 Pro
-  const ZONE_DOCKED = new Set([2, 9, 14]);
-  let zoneTesting = false;
-  async function renderZoneTest() {
-    const list = await api("GET", "/api/zones/captured").catch(() => []);
-    const docked = ZONE_DOCKED.has(state?.status);
-    $("#zone-list").replaceChildren(...(list.length ? list.map((z) => {
-      const btn = el("button", { className: "play", textContent: "▶", disabled: zoneTesting || !docked,
-        title: docked ? "Testar: limpar esta zona" : "Só com o robô na base" });
-      btn.onclick = () => confirmAction("O robô vai sair da base para limpar a zona. Fique por perto para parar se precisar.",
-        () => zoneTest(z.zones));
-      const sizes = z.sizes.map(([w, h]) => `${w} × ${h} m`).join(", ");
-      return el("div", { className: "list-row" },
-        el("div", {}, el("div", { textContent: z.routine ? `Rotina "${z.routine}"` : `${z.zones.length} zona(s)` }),
-          el("div", { className: "muted small", textContent: `${fmtDate(z.ts)} · ${sizes}` })),
-        btn);
-    }) : [el("p", { className: "muted small", textContent: "Nenhuma zona ainda. Rode uma limpeza por zona (ou a rotina) pelo app Xiaomi Home." })]));
-  }
-
-  async function zoneTest(zones) {
-    const out = $("#zone-out"), goHome = $("#zone-home").checked;
-    const log = (line) => { out.hidden = false; out.textContent += line + "\n"; };
-    out.textContent = "";
-    zoneTesting = true; renderZoneTest();
-    try {
-      const res = await api("POST", "/api/clean/zones", { zones });
-      log(`resposta do robô: ${JSON.stringify(res)}`);
-      if (res.code !== 0) { log("O robô recusou o formato. Nada foi iniciado."); return; }
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const st = await api("GET", "/api/state");
-        const v = st.values || {};
-        log(`${(i + 1) * 3} s: ${st.status_label} (${st.status}) · tipo 2/5 = ${v["2/5"]} · 2/40 = ${String(v["2/40"] ?? "").slice(0, 160)}`);
-        if (v["2/5"] === 2 && String(v["2/40"]).includes("zones")) {
-          log("FUNCIONOU: o robô aceitou e está limpando a zona (formato aceito).");
-          if (goHome) { await api("POST", "/api/actions/home"); log("Mandei voltar à base."); }
-          return;
-        }
-      }
-      log("Em 60 s o robô não confirmou uma limpeza por zona. Confira onde ele está e, se precisar, mande voltar.");
-    } catch (e) {
-      log(`erro: ${e.message}`);
-    } finally {
-      zoneTesting = false; renderZoneTest();
-    }
-  }
-
   let roomsCache = null;
   async function renderHomeLists() {
-    const [custom, sched] = await Promise.all([api("GET", "/api/custom"), api("GET", "/api/schedules")]);
+    const [custom, sched, zones] = await Promise.all([api("GET", "/api/custom"), api("GET", "/api/schedules"),
+      api("GET", "/api/zones").catch(() => [])]);
+    savedZones = zones;
+    if (zoneId && !savedZones.some((z) => z.id === zoneId)) { zoneSel = []; zoneId = null; toggleRefresh(); }
     $("#custom-list").replaceChildren(...(custom.length ? custom.map((c) => {
-      const play = el("button", { className: "play", title: `Executar ${c.name}`, textContent: "▶" });
+      const play = el("button", { className: "play", title: c.runnable ? `Executar ${c.name}` : c.reason, textContent: "▶",
+        disabled: !c.runnable });
       play.onclick = () => confirmAction(`Executar "${c.name}"? O robô vai sair da base.`,
         () => run(c.name, () => api("POST", `/api/clean/custom/${c.id}`)));
+      const where = c.rooms.join(", ") || (c.zones ? `${c.zones.length} zona(s), aprendida(s) do app` : "zonas definidas no app");
       return el("div", { className: "list-row" },
-        el("div", {}, el("div", { textContent: c.name }), el("div", { className: "muted small", textContent: c.rooms.join(", ") || "zonas definidas no app" })),
+        el("div", {}, el("div", { textContent: c.name }), el("div", { className: "muted small", textContent: where }),
+          ...(c.runnable ? [] : [el("div", { className: "muted small", textContent: c.reason })])),
         play);
     }) : [el("p", { className: "muted small", textContent: "Nenhuma rotina. Crie no app Xiaomi Home." })]));
-    renderZoneTest();
     const on = sched.filter((s) => s.on).length;
     $("#sub-sched").textContent = `${sched.length} limpeza(s) programada(s)${sched.length ? `, ${on} ativa(s)` : ""}`;
     $("#btn-sched").onclick = () => openSheet("Limpeza programada", [
@@ -253,12 +213,62 @@
     const hover = $("#map-hover");
     await MapView.render($("#home-map"), mapData, {
       selected: areaSel,
-      onRoomClick: toggleRoom,
-      onHover: (e, name) => { hover.textContent = e && name ? `${name} · clique para escolher` : " "; },
+      zones: zoneSel,
+      onRoomClick: drawing ? undefined : toggleRoom,
+      onDraw: drawing ? addZone : undefined,
+      onHover: (e, name) => {
+        hover.textContent = drawing ? "Arraste no mapa para desenhar a zona" : e && name ? `${name} · clique para escolher` : " ";
+      },
     });
+    renderZoneTools();
+  }
+
+  // ---- zonas: desenhar no mapa, salvar com nome (admin) e limpar ----------------------------------------------
+  const ZONE_MIN = 300, ZONE_WARN = 700, ZONE_MAX = 10;
+  function addZone(rect) {
+    const [x1, y1, x2, y2] = rect, w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+    if (Math.min(w, h) < ZONE_MIN) return toast("Zona pequena demais: cada lado precisa ter ao menos 0,3 m.", true);
+    if (zoneId) { zoneSel = []; zoneId = null; }                // editar uma zona salva vira uma seleção nova
+    if (zoneSel.length >= ZONE_MAX) return toast(`No máximo ${ZONE_MAX} zonas por limpeza.`, true);
+    areaSel.clear();
+    zoneSel.push(rect);
+    if (Math.min(w, h) < ZONE_WARN) toast("Zona com menos de 0,7 m de lado: o robô pode recusar.");
+    toggleRefresh();
+  }
+
+  function renderZoneTools() {
+    const box = $("#zone-tools");
+    box.hidden = !mapData;
+    if (!mapData) return;
+    const draw = el("button", { className: drawing ? "primary" : "", textContent: drawing ? "Concluir" : "Desenhar zona" });
+    draw.onclick = () => { drawing = !drawing; drawMap(); };
+    const chips = zoneSel.map((z, i) => {
+      const x = el("button", { className: "chip on", title: "Tirar esta zona", textContent: `${i + 1} ✕` });
+      x.onclick = () => { zoneSel.splice(i, 1); zoneId = null; toggleRefresh(); };
+      return x;
+    });
+    const save = el("button", { id: "zone-save", textContent: "Salvar zona" });
+    save.onclick = saveZone;
+    box.replaceChildren(draw, ...chips, ...(zoneSel.length && !zoneId ? [save] : []));
+  }
+
+  function saveZone() {
+    const input = el("input", { type: "text", maxLength: 40, placeholder: "ex.: Frente do sofá" });
+    openSheet("Salvar zona", [
+      el("p", { className: "muted small", textContent: `${zoneSel.length} retângulo(s). O nome não pode ser igual ao de outra zona nem ao de uma rotina.` }),
+      input,
+    ], { confirm: async () => {
+      const z = await api("POST", "/api/zones", { name: input.value, zones: zoneSel });
+      savedZones = await api("GET", "/api/zones");
+      zoneId = z.id;
+      toast(`Zona "${z.name}" salva`);
+      toggleRefresh();
+    }, confirmLabel: "Salvar" });
+    setTimeout(() => input.focus(), 50);
   }
 
   function toggleRoom(id) {
+    zoneSel = []; zoneId = null;
     areaSel.has(id) ? areaSel.delete(id) : areaSel.add(id);
     renderSubs(); renderStartButtons();
     if (mapData) drawMap(); else renderHomeMap();
@@ -274,6 +284,10 @@
     if (PAUSED.has(st)) return run("Continuar", () => api("POST", "/api/actions/resume"));
     if (RETURNING.has(st)) return run("Parar", () => api("POST", "/api/actions/stop"));
     const where = areaText();
+    if (zoneSel.length) {
+      return confirmAction(`Limpar ${where}? O robô vai sair da base.`,
+        () => run("Limpar zonas", () => api("POST", "/api/clean/zones", zoneId ? { zone_id: zoneId } : { zones: zoneSel })));
+    }
     confirmAction(`Iniciar limpeza: ${where}? O robô vai sair da base.`, () => areaSel.size
       ? run("Limpar cômodos", () => api("POST", "/api/clean/rooms", { ids: [...areaSel] }))
       : run("Iniciar limpeza", () => api("POST", "/api/actions/start")));
@@ -354,20 +368,54 @@
   function openArea() {
     const rooms = mapData?.rooms?.slice().sort((a, b) => a.id - b.id) || roomsCache || [];
     const draft = new Set(areaSel);
-    const all = el("button", { className: "choice" + (draft.size ? "" : " on"), textContent: "Casa inteira" });
+    let draftZone = zoneId, touched = false;
+    const all = el("button", { className: "choice" + (draft.size || zoneSel.length ? "" : " on"), textContent: "Casa inteira" });
     const btns = rooms.map((r) => {
       // ajustes por cômodo (vêm no mapa da nuvem; 0 = usa o ajuste geral). Só leitura por enquanto.
       const own = [r.fan && `sucção ${r.fan}`, r.water && `água ${r.water}`, r.times && `${r.times}×`].filter(Boolean).join(", ");
       const b = el("button", { className: "choice" + (draft.has(r.id) ? " on" : ""), textContent: own ? `${r.name} · ${own}` : r.name,
         title: own ? "Este cômodo tem ajustes próprios (definidos no app Xiaomi Home)" : "Usa o ajuste geral" });
-      b.onclick = () => { draft.has(r.id) ? draft.delete(r.id) : draft.add(r.id); b.classList.toggle("on"); all.classList.toggle("on", !draft.size); };
+      b.onclick = () => {
+        touched = true; draftZone = null; zbtns.forEach((z) => z.classList.remove("on"));
+        draft.has(r.id) ? draft.delete(r.id) : draft.add(r.id); b.classList.toggle("on"); all.classList.toggle("on", !draft.size);
+      };
       return b;
     });
-    all.onclick = () => { draft.clear(); btns.forEach((b) => b.classList.remove("on")); all.classList.add("on"); };
+    const zbtns = savedZones.map((z) => {
+      const b = el("button", { className: "choice" + (draftZone === z.id ? " on" : ""), textContent: z.name });
+      b.onclick = () => {
+        touched = true; draftZone = z.id; draft.clear();
+        [all, ...btns, ...zbtns].forEach((x) => x.classList.toggle("on", x === b));
+      };
+      return b;
+    });
+    all.onclick = () => {
+      touched = true; draftZone = null; draft.clear();
+      [...btns, ...zbtns].forEach((b) => b.classList.remove("on")); all.classList.add("on");
+    };
+    const dels = savedZones.map((z) => {
+      const d = el("button", { className: "chip", title: `Apagar a zona ${z.name}`, textContent: `🗑 ${z.name}` });
+      d.onclick = () => run(`Apagar ${z.name}`, async () => {
+        await api("DELETE", `/api/zones/${z.id}`);
+        if (zoneId === z.id) { zoneSel = []; zoneId = null; }
+        savedZones = await api("GET", "/api/zones");
+        $("#sheet").close(); toggleRefresh();
+      });
+      return d;
+    });
     openSheet("Área", [
       el("div", { className: "choices" }, all, ...btns),
       el("p", { className: "muted small", textContent: "Também dá para tocar nos cômodos do mapa." }),
-    ], { confirm: () => { areaSel.clear(); draft.forEach((id) => areaSel.add(id)); toggleRefresh(); } });
+      ...(savedZones.length ? [el("div", { className: "card-label", textContent: "Zonas salvas" }), el("div", { className: "choices" }, ...zbtns),
+        el("div", { className: "chips zone-dels" }, ...dels)] : []),
+      el("p", { className: "muted small", textContent: "Para uma zona nova, use \"Desenhar zona\" abaixo do mapa." }),
+    ], { confirm: () => {
+      if (!touched) return;
+      areaSel.clear(); draft.forEach((id) => areaSel.add(id));
+      const z = savedZones.find((x) => x.id === draftZone);
+      zoneSel = z ? z.zones.map((r) => [...r]) : []; zoneId = z ? z.id : null;
+      toggleRefresh();
+    } });
   }
   const toggleRefresh = () => { renderSubs(); renderStartButtons(); mapData ? drawMap() : renderHomeMap(); };
 
@@ -681,6 +729,7 @@
     es.addEventListener("mapdata", async () => { mapData = await api("GET", "/api/map").catch(() => mapData); if (current() === "inicio" && mapData) drawMap(); });
     for (const ev of ["online", "offline"]) es.addEventListener(ev, async () => { await loadState().catch(() => {}); renderHeader(); });
     es.addEventListener("command", () => { if (current() === "diagnostico") refresh(); });
+    es.addEventListener("zones", () => { if (current() === "inicio") renderHomeLists(); });
     es.addEventListener("cleaning", () => { if (["historico", "dashboards", "inicio"].includes(current())) refresh(); });
     es.addEventListener("fault", () => { if (current() === "diagnostico") refresh(); });
     es.addEventListener("map", () => {
@@ -715,7 +764,7 @@
     return robots;
   }
   function resetCaches() {
-    state = null; settings = null; mapData = null; roomsCache = null; areaSel.clear();
+    state = null; settings = null; mapData = null; roomsCache = null; areaSel.clear(); zoneSel = []; zoneId = null; drawing = false;
     for (const k of Object.keys(prevRaw)) delete prevRaw[k];
   }
   function setRobot(id) {

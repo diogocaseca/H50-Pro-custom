@@ -20,7 +20,7 @@
     return m.slice(0, 3);
   }
 
-  async function render(host, m, { onHover, onRoomClick, selected, heat, dim, onPoint, marks } = {}) {
+  async function render(host, m, { onHover, onRoomClick, selected, heat, dim, onPoint, marks, zones, onDraw } = {}) {
     const grid = m._grid || (m._grid = await inflate(m.grid_zlib_b64));
     const sel = selected && selected.size ? selected : null;   // com seleção, o resto fica apagado
     const faint = dim && !sel;                                  // mapa de calor: cômodos quase apagados
@@ -127,6 +127,19 @@
       g.beginPath(); g.arc(X(x), Y(y), r, 0, 2 * Math.PI); g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent"); g.fill();
     }
 
+    // zonas de limpeza (mm, [x1,y1,x2,y2]): retângulo na cor de destaque, numerado, com o tamanho em metros
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2f6fde";
+    const zoneRect = (ctx, [x1, y1, x2, y2], text) => {
+      const l = X(Math.min(x1, x2)), r = X(Math.max(x1, x2)), t = Y(Math.max(y1, y2)), b = Y(Math.min(y1, y2));
+      ctx.save();
+      ctx.fillStyle = accent; ctx.globalAlpha = 0.22; ctx.fillRect(l, t, r - l, b - t);
+      ctx.globalAlpha = 1; ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(l, t, r - l, b - t);
+      ctx.restore();
+      if (text) label(ctx, text, (l + r) / 2, (t + b) / 2, ink, dark, 11, true);
+    };
+    const size = ([x1, y1, x2, y2]) => `${(Math.abs(x2 - x1) / 1000).toFixed(1).replace(".", ",")} × ${(Math.abs(y2 - y1) / 1000).toFixed(1).replace(".", ",")} m`;
+    (zones || []).forEach((z, i) => zoneRect(g, z, `${i + 1} · ${size(z)}`));
+
     // marcadores do editor (mm): círculo com cruz
     for (const [x, y] of marks || []) {
       g.beginPath(); g.arc(X(x), Y(y), 6, 0, 2 * Math.PI);
@@ -175,7 +188,41 @@
 
     const wrap = document.createElement("div");
     wrap.className = "map-wrap";
-    wrap.append(cv);
+    const holder = document.createElement("div");
+    holder.style.position = "relative";
+    holder.append(cv);
+    wrap.append(holder);
+
+    // desenhar zona: arrastar na tela (dedo ou mouse) faz um retângulo; ao soltar, devolve [x1,y1,x2,y2] em mm
+    if (onDraw) {
+      const over = document.createElement("canvas");
+      over.style.cssText = `position:absolute;left:0;top:0;width:${cv.style.width};height:${cv.style.height};pointer-events:none`;
+      over.width = cv.width; over.height = cv.height;
+      const og = over.getContext("2d");
+      og.scale(dpr, dpr);
+      holder.append(over);
+      cv.style.cursor = "crosshair";
+      const toMm = (px, py) => [Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res)];
+      const at = (e) => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+      let start = null;
+      cv.addEventListener("pointerdown", (e) => { start = at(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); });
+      cv.addEventListener("pointermove", (e) => {
+        if (!start) return;
+        const [px, py] = at(e);
+        og.clearRect(0, 0, cv.width, cv.height);
+        zoneRect(og, [...toMm(...start), ...toMm(px, py)], size([...toMm(...start), ...toMm(px, py)]));
+      });
+      const finish = (e) => {
+        if (!start) return;
+        const [px, py] = at(e), [sx, sy] = start;
+        start = null;
+        og.clearRect(0, 0, cv.width, cv.height);
+        if (Math.abs(px - sx) < 8 || Math.abs(py - sy) < 8) return;     // toque sem arrastar
+        onDraw([...toMm(sx, sy), ...toMm(px, py)]);
+      };
+      cv.addEventListener("pointerup", finish);
+      cv.addEventListener("pointercancel", () => { start = null; og.clearRect(0, 0, cv.width, cv.height); });
+    }
     host.replaceChildren(wrap, legend);
     return { area_m2: (grid.filter((v) => v > 1).length * res * res) / 1e6 };
   }
