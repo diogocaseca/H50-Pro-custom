@@ -20,7 +20,11 @@
     return m.slice(0, 3);
   }
 
-  async function render(host, m, { onHover, onRoomClick, selected, heat, dim, onPoint, marks, zones, onDraw } = {}) {
+  // zoom: limite do canvas (lado e área em pixels de tela) para não estourar a memória em mapas grandes
+  const ZOOM_MAX = 5, MAX_SIDE = 8192, MAX_AREA = 40e6;
+
+  async function render(host, m, opts = {}) {
+    const { onHover, onRoomClick, selected, heat, dim, onPoint, marks, zones, onDraw, view } = opts;
     const grid = m._grid || (m._grid = await inflate(m.grid_zlib_b64));
     const sel = selected && selected.size ? selected : null;   // com seleção, o resto fica apagado
     const faint = dim && !sel;                                  // mapa de calor: cômodos quase apagados
@@ -58,8 +62,14 @@
     // tela: escala para caber na largura
     const box = host.clientWidth || 800;
     const maxH = Math.max(280, window.innerHeight * (host.dataset.maxh ? +host.dataset.maxh : 0.72));
-    const scale = Math.max(1, Math.min(6, (box - 2) / cw, maxH / ch));
+    const scale0 = Math.max(1, Math.min(6, (box - 2) / cw, maxH / ch));
     const dpr = window.devicePixelRatio || 1;
+    // zoom (só quando quem chama passa `view`, que guarda o nível e a posição entre um desenho e outro)
+    const maxZoom = view ? Math.max(1, Math.min(ZOOM_MAX, MAX_SIDE / (cw * scale0 * dpr), MAX_SIDE / (ch * scale0 * dpr),
+      Math.sqrt(MAX_AREA / (cw * ch * scale0 * scale0 * dpr * dpr)))) : 1;
+    if (view) view.zoom = Math.min(maxZoom, Math.max(1, view.zoom || 1));
+    const zoom = view ? view.zoom : 1;
+    const scale = scale0 * zoom;
     const cv = document.createElement("canvas");
     cv.style.width = `${cw * scale}px`; cv.style.height = `${ch * scale}px`;
     cv.width = Math.round(cw * scale * dpr); cv.height = Math.round(ch * scale * dpr);
@@ -148,6 +158,7 @@
 
     // tooltip: cômodo sob o cursor
     const names = Object.fromEntries(m.rooms.map((r) => [r.id, r.name]));
+    const gesture = { moved: false };
     cv.addEventListener("pointermove", (e) => {
       const b = cv.getBoundingClientRect();
       const c = Math.floor((e.clientX - b.left) / scale) + c0, r = r1 - Math.floor((e.clientY - b.top) / scale);
@@ -159,6 +170,7 @@
     if (onPoint) {      // editor: o clique devolve o ponto em mm (mundo), com precisão menor que o pixel da grade
       cv.style.cursor = "crosshair";
       cv.addEventListener("click", (e) => {
+        if (gesture.moved) return;
         const b = cv.getBoundingClientRect();
         const px = e.clientX - b.left, py = e.clientY - b.top;
         onPoint(Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res), e);
@@ -167,6 +179,7 @@
     if (onRoomClick) {
       cv.style.cursor = "pointer";
       cv.addEventListener("click", (e) => {
+        if (gesture.moved) return;                            // arrastou para mover o mapa: não é escolha de cômodo
         const b = cv.getBoundingClientRect();
         const c = Math.floor((e.clientX - b.left) / scale) + c0, r = r1 - Math.floor((e.clientY - b.top) / scale);
         const v = c >= 0 && c < W && r >= 0 && r < H ? grid[r * W + c] : 0;
@@ -188,42 +201,148 @@
 
     const wrap = document.createElement("div");
     wrap.className = "map-wrap";
+    wrap.style.position = "relative";
     const holder = document.createElement("div");
     holder.style.position = "relative";
     holder.append(cv);
     wrap.append(holder);
+    const frame = document.createElement("div");
+    frame.className = "map-frame";
+    frame.append(wrap);
+    if (view && zoom > 1) {            // janela do tamanho do mapa inteiro; o mapa ampliado rola dentro dela
+      wrap.style.cssText += `;overflow:auto;justify-content:flex-start;margin:0 auto;` +
+        `width:${Math.min(box, cw * scale0 + 2)}px;height:${ch * scale0 + 16}px`;
+    }
 
     // desenhar zona: arrastar na tela (dedo ou mouse) faz um retângulo; ao soltar, devolve [x1,y1,x2,y2] em mm
+    let og = null;
     if (onDraw) {
       const over = document.createElement("canvas");
       over.style.cssText = `position:absolute;left:0;top:0;width:${cv.style.width};height:${cv.style.height};pointer-events:none`;
       over.width = cv.width; over.height = cv.height;
-      const og = over.getContext("2d");
+      og = over.getContext("2d");
       og.scale(dpr, dpr);
       holder.append(over);
       cv.style.cursor = "crosshair";
-      const toMm = (px, py) => [Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res)];
-      const at = (e) => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
-      let start = null;
-      cv.addEventListener("pointerdown", (e) => { start = at(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); });
-      cv.addEventListener("pointermove", (e) => {
-        if (!start) return;
-        const [px, py] = at(e);
-        og.clearRect(0, 0, cv.width, cv.height);
-        zoneRect(og, [...toMm(...start), ...toMm(px, py)], size([...toMm(...start), ...toMm(px, py)]));
-      });
-      const finish = (e) => {
-        if (!start) return;
-        const [px, py] = at(e), [sx, sy] = start;
-        start = null;
-        og.clearRect(0, 0, cv.width, cv.height);
-        if (Math.abs(px - sx) < 8 || Math.abs(py - sy) < 8) return;     // toque sem arrastar
-        onDraw([...toMm(sx, sy), ...toMm(px, py)]);
-      };
-      cv.addEventListener("pointerup", finish);
-      cv.addEventListener("pointercancel", () => { start = null; og.clearRect(0, 0, cv.width, cv.height); });
     }
-    host.replaceChildren(wrap, legend);
+    const toMm = (px, py) => [Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res)];
+    const at = (e) => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+    const clearDraw = () => og && og.clearRect(0, 0, cv.width, cv.height);
+
+    // zoom em volta de um ponto da tela (clientX/Y): guarda onde o ponto está no mapa e redesenha na escala nova
+    const setZoom = (z, clientX, clientY) => {
+      if (!view) return;
+      const nz = Math.min(maxZoom, Math.max(1, z));
+      if (Math.abs(nz - zoom) < 0.01) return;
+      const b = cv.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+      view.anchor = { u: (clientX - b.left) / b.width, v: (clientY - b.top) / b.height,
+                      vx: clientX - wr.left, vy: clientY - wr.top };
+      view.zoom = nz;
+      render(host, m, opts);
+    };
+    const center = () => { const wr = wrap.getBoundingClientRect(); return [wr.left + wr.width / 2, wr.top + wr.height / 2]; };
+
+    // gestos: 1 dedo/mouse = desenhar (modo zona), mover o mapa (com zoom) ou tocar; 2 dedos = pinça
+    const pts = new Map();
+    let mode = null, drawStart = null, start = null, scroll0 = null, pinch = null;
+    const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); };
+    const mid = () => { const [a, b] = [...pts.values()]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; };
+    cv.addEventListener("pointerdown", (e) => {
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      try { cv.setPointerCapture(e.pointerId); } catch { /* ponteiro já solto */ }
+      if (pts.size === 2 && view) {
+        drawStart = null; clearDraw();
+        const [mx, my] = mid(), b = cv.getBoundingClientRect();
+        pinch = { d: dist(), mx, my, ox: mx - b.left, oy: my - b.top };
+        mode = "pinch"; gesture.moved = true;
+        return;
+      }
+      if (pts.size > 1) return;
+      gesture.moved = false; start = [e.clientX, e.clientY];
+      if (onDraw) { mode = "draw"; drawStart = at(e); e.preventDefault(); }
+      else if (view && zoom > 1) { mode = "pan"; scroll0 = [wrap.scrollLeft, wrap.scrollTop]; }
+      else mode = "tap";
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (mode === "pinch" && pts.size === 2) {
+        holder.style.transformOrigin = `${pinch.ox}px ${pinch.oy}px`;
+        holder.style.transform = `scale(${dist() / pinch.d})`;
+        return;
+      }
+      if (!start) return;
+      const dx = e.clientX - start[0], dy = e.clientY - start[1];
+      if (Math.hypot(dx, dy) > 6) gesture.moved = true;
+      if (mode === "draw" && drawStart) {
+        const [px, py] = at(e), r = [...toMm(...drawStart), ...toMm(px, py)];
+        clearDraw();
+        zoneRect(og, r, size(r));
+      } else if (mode === "pan") {
+        wrap.scrollLeft = scroll0[0] - dx; wrap.scrollTop = scroll0[1] - dy;
+      }
+    });
+    const end = (e, cancel) => {
+      if (!pts.has(e.pointerId)) return;
+      if (mode === "pinch") {
+        const ratio = pts.size === 2 ? dist() / pinch.d : 1;
+        pts.delete(e.pointerId);
+        if (pts.size < 2) {
+          holder.style.transform = "";
+          mode = "done";                 // o outro dedo ainda na tela não vira um arrasto
+          if (!cancel) setZoom(zoom * ratio, pinch.mx, pinch.my);
+        }
+        return;
+      }
+      pts.delete(e.pointerId);
+      if (mode === "draw" && drawStart && !cancel) {
+        const [px, py] = at(e), [sx, sy] = drawStart;
+        clearDraw();
+        if (Math.abs(px - sx) >= 8 && Math.abs(py - sy) >= 8) onDraw([...toMm(sx, sy), ...toMm(px, py)]);
+      }
+      clearDraw();
+      drawStart = null; start = null;
+      if (!pts.size) mode = null;
+    };
+    cv.addEventListener("pointerup", (e) => end(e, false));
+    cv.addEventListener("pointercancel", (e) => end(e, true));
+
+    if (view) {
+      // Ctrl + rodinha (e a pinça do touchpad, que chega assim): zoom. A rodinha sozinha continua rolando a página.
+      let wheel = null;
+      wrap.addEventListener("wheel", (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        wheel = wheel || { f: 1, x: e.clientX, y: e.clientY };
+        wheel.f *= Math.exp(-e.deltaY / 300);
+        if (!wheel.t) wheel.t = setTimeout(() => { const w = wheel; wheel = null; setZoom(zoom * w.f, w.x, w.y); }, 120);
+      }, { passive: false });
+      wrap.addEventListener("scroll", () => {
+        const b = cv.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+        view.anchor = { u: (wr.left + wr.width / 2 - b.left) / b.width, v: (wr.top + wr.height / 2 - b.top) / b.height,
+                        vx: wr.width / 2, vy: wr.height / 2 };
+      });
+      const btn = (text, title, fn) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = text; b.title = title; b.setAttribute("aria-label", title);
+        b.onclick = fn;
+        return b;
+      };
+      const tools = document.createElement("div");
+      tools.className = "map-zoom";
+      const zin = btn("+", "Aproximar", () => setZoom(zoom * 1.5, ...center()));
+      const zout = btn("−", "Afastar", () => setZoom(zoom / 1.5, ...center()));
+      const zreset = btn("⟲", "Mapa inteiro", () => { view.zoom = 1; view.anchor = null; render(host, m, opts); });
+      zin.disabled = zoom >= maxZoom - 0.01; zout.disabled = zreset.disabled = zoom <= 1;
+      tools.append(zin, zout, zreset);
+      frame.append(tools);
+    }
+    host.replaceChildren(frame, legend);
+    if (view && zoom > 1 && view.anchor) {        // o ponto que estava sob o dedo/mouse continua no mesmo lugar
+      const a = view.anchor;
+      wrap.scrollLeft = holder.offsetLeft + a.u * cw * scale - a.vx;
+      wrap.scrollTop = holder.offsetTop + a.v * ch * scale - a.vy;
+    }
     return { area_m2: (grid.filter((v) => v > 1).length * res * res) / 1e6 };
   }
 

@@ -218,3 +218,6 @@ main:focus { outline: none; }
 .me-tools button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 #zone-tools { flex-wrap: wrap; gap: 6px; }
 .zone-dels { justify-content: flex-start; margin-top: 8px; }
+.map-frame { position: relative; }
+.map-zoom { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; z-index: 1; }
+.map-zoom button { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; border-radius: 8px; }

@@ -82,6 +82,7 @@
   let state = null, appInfo = null, settings = null, mapData = null, cloud = null, robots = [];
   const areaSel = new Set();                       // cômodos escolhidos em "Área" (vazio = casa inteira)
   let zoneSel = [], zoneId = null, drawing = false, savedZones = [];   // zonas [x1,y1,x2,y2] (mm); zoneId = zona salva
+  const mapView = { zoom: 1, anchor: null };       // zoom do mapa do Início: sobrevive aos redesenhos
   const V = (k) => state?.values?.[k];
   const CLEANING = new Set([4, 10, 16, 17]), PAUSED = new Set([5, 18]), RETURNING = new Set([6, 19, 20, 21, 24]);
   const BASE_MODE = { 0: "", 1: "Secando", 2: "Esvaziando o pó", 3: "Lavando o mop" };
@@ -214,6 +215,7 @@
     await MapView.render($("#home-map"), mapData, {
       selected: areaSel,
       zones: zoneSel,
+      view: mapView,
       onRoomClick: drawing ? undefined : toggleRoom,
       onDraw: drawing ? addZone : undefined,
       onHover: (e, name) => {
@@ -765,6 +767,7 @@
   }
   function resetCaches() {
     state = null; settings = null; mapData = null; roomsCache = null; areaSel.clear(); zoneSel = []; zoneId = null; drawing = false;
+    mapView.zoom = 1; mapView.anchor = null;
     for (const k of Object.keys(prevRaw)) delete prevRaw[k];
   }
   function setRobot(id) {
