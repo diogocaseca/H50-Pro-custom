@@ -162,6 +162,14 @@ class WebTests(unittest.TestCase):
         self.assertEqual(d["status_label"], "Carregando")
         rows = {r["key"]: r for r in d["rows"]}
         self.assertEqual(rows["2/6"]["value"], "0,87 m²")   # 2/6 = 87 no fixture
+        old = {k: self.gw.cache.get(k) for k in ("2/18", "2/31", "2/88", "2/90")}
+        try:
+            self.gw.cache.update({"2/18": '{"mode":1,"progress":0}', "2/31": 1, "2/88": 0, "2/90": 30})
+            rows = {r["key"]: r for r in self.call("GET", "/api/state")[1]["rows"]}
+            self.assertEqual(rows["2/88"]["value"], "75 %")       # 2 h de secagem, faltam 30 min
+            self.assertEqual(rows["2/88"]["raw"], 0)
+        finally:
+            self.gw.cache.update(old)
 
     def test_settings_and_put(self):
         _, items = self.call("GET", "/api/settings")

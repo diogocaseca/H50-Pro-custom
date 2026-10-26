@@ -183,9 +183,15 @@ class App:
             return _local(v)
         return v
 
+    def _row_value(self, key: str, kind: str, snap: dict):
+        if kind == "drying":                             # depende de 2/18, 2/31 e 2/90, não só do 2/88
+            p = decoders.drying_percent(snap)
+            return "—" if p is None else f"{p} %"
+        return self._fmt(key, kind, snap.get(key))
+
     def state(self, **_):
         snap = self.gw.cache.snapshot()
-        rows = [{"key": k, "label": lbl, "value": self._fmt(k, kind, snap.get(k)), "raw": snap.get(k),
+        rows = [{"key": k, "label": lbl, "value": self._row_value(k, kind, snap), "raw": snap.get(k),
                  "changed_at": self.gw.cache.changed_at.get(k)} for k, lbl, kind in catalog.STATE_ROWS]
         status = snap.get("2/2")
         return {"health": self.gw.health(), "status": status, "status_label": catalog.label("2/2", status),

@@ -307,7 +307,7 @@ STATE_ROWS: list[tuple[str, str, str]] = [
     ("2/40", "Limpando agora", "rooms"),
     ("2/96", "Escova/mop em uso", "raw"),
     ("2/18", "Base", "base"),
-    ("2/88", "Progresso da secagem", "pct"),
+    ("2/88", "Progresso da secagem", "drying"),         # calculado com 2/31 e 2/90 (ver decoders)
     ("2/90", "Secagem restante", "minutes"),
     ("2/97", "Tanque de água suja cheio", "bool"),
     ("2/98", "Tanque de água limpa vazio", "bool"),

@@ -109,6 +109,17 @@ class Decoders(unittest.TestCase):
         self.assertEqual(decoders.current_config('{"rooms":[8],"clean_mode":3}')["rooms"], [8])
         self.assertEqual(decoders.current_config('{"clean_mode":1}')["rooms"], [])
 
+    def test_drying_percent(self):
+        secando = '{"mode":1,"progress":0}'
+        # o H50 Pro deixa o 2/88 em 0: calcula pela duração (2/31 = 2 -> 3 h) e minutos restantes (2/90)
+        self.assertEqual(decoders.drying_percent({"2/18": secando, "2/88": 0, "2/31": 2, "2/90": 135}), 25)
+        self.assertEqual(decoders.drying_percent({"2/18": secando, "2/31": 1, "2/90": 0}), 100)
+        self.assertEqual(decoders.drying_percent({"2/18": "{}", "2/31": 3, "2/90": 60}), 75)   # só os minutos restantes
+        self.assertEqual(decoders.drying_percent({"2/18": secando, "2/31": 1, "2/90": 999}), 0)
+        self.assertEqual(decoders.drying_percent({"2/18": secando, "2/88": 40, "2/31": 2, "2/90": 10}), 40)  # vale o informado
+        self.assertEqual(decoders.drying_percent({"2/18": '{"mode":0}', "2/88": 0, "2/31": 2, "2/90": 0}), 0)
+        self.assertIsNone(decoders.drying_percent({"2/18": secando, "2/31": 9, "2/90": 30}))
+
 
 class Batching(unittest.TestCase):
     def test_plan_respects_budget(self):

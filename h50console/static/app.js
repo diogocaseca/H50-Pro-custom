@@ -86,6 +86,13 @@
   const V = (k) => state?.values?.[k];
   const CLEANING = new Set([4, 10, 16, 17]), PAUSED = new Set([5, 18]), RETURNING = new Set([6, 19, 20, 21, 24]);
   const BASE_MODE = { 0: "", 1: "Secando", 2: "Esvaziando o pó", 3: "Lavando o mop" };
+  const DRYING_MINUTES = { 1: 120, 2: 180, 3: 240 };   // 2/31 Duração da secagem
+  // % da secagem: o H50 Pro deixa o 2/88 em 0; calcula pela duração (2/31) e minutos restantes (2/90). Ver decoders.drying_percent.
+  function dryingPct() {
+    if (V("2/88") > 0) return V("2/88");
+    const total = DRYING_MINUTES[V("2/31")], left = V("2/90");
+    return total && typeof left === "number" ? Math.max(0, Math.min(100, Math.round((total - left) * 100 / total))) : null;
+  }
 
   async function loadState() { state = await api("GET", "/api/state"); return state; }
   async function loadSettings() { settings = await api("GET", "/api/settings"); return settings; }
@@ -117,7 +124,9 @@
       out.push(chip(`${p >= 0 ? p + " % · " : ""}${area.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} m² · ${fmtDur(V("2/7"))}`));
     }
     if (base.mode) {
-      const extra = base.mode === 1 && V("2/90") ? ` · faltam ${fmtMin(V("2/90"))}` : base.progress ? ` · ${base.progress} %` : "";
+      const dry = base.mode === 1 ? dryingPct() : null;
+      const extra = base.mode === 1 && V("2/90") ? `${dry != null ? ` · ${dry} %` : ""} · faltam ${fmtMin(V("2/90"))}`
+        : base.progress ? ` · ${base.progress} %` : "";
       out.push(chip(BASE_MODE[base.mode] + extra));
     }
     if (V("3/1") != null) out.push(chip(`${V("3/1")} %` + (V("3/2") === 1 ? " · Carregando" : ""), V("3/1") < 20 ? "warn" : ""));

@@ -97,6 +97,27 @@ def base_status(raw) -> dict:
 
 # P2 resolvido em 11/10: 1 = secando (2/90 = minutos restantes), 2 = esvaziando o pó, 3 = lavando o mop
 BASE_MODE = {0: "Ociosa", 1: "Secando", 2: "Esvaziando o pó", 3: "Lavando o mop"}
+DRYING_MINUTES = {1: 120, 2: 180, 3: 240}      # 2/31 Duração da secagem: 2 h, 3 h, 4 h
+
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def drying_percent(values: dict) -> int | None:
+    """% da secagem dos mops. O H50 Pro deixa o 2/88 em 0 durante a secagem e só informa os minutos restantes
+    (2/90), então a conta usa a duração escolhida (2/31). Se o 2/88 vier preenchido, vale ele. Fora da secagem: 0;
+    secando sem dados para calcular: None."""
+    reported = _num(values.get("2/88"))
+    if reported and reported > 0:
+        return reported
+    left = _num(values.get("2/90"))
+    if base_status(values.get("2/18"))["mode"] != 1 and not (left and left > 0):
+        return 0
+    total = DRYING_MINUTES.get(values.get("2/31"))
+    if not total or left is None:
+        return None
+    return max(0, min(100, round((total - left) * 100 / total)))
 
 
 def current_config(raw) -> dict:
