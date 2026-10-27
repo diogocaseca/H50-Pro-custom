@@ -99,6 +99,10 @@ MIGRATIONS = [
       updated_at TEXT NOT NULL
     );
     """,
+    # v4: por onde o comando foi (lan | cloud)
+    """
+    ALTER TABLE command_log ADD COLUMN via TEXT;
+    """,
 ]
 
 
@@ -274,10 +278,10 @@ class Store:
 
     # -- comandos ------------------------------------------------------------------
     def log_command(self, source: str, command: str, params, result_code, latency_ms: int | None,
-                    error: str | None = None) -> int:
+                    error: str | None = None, via: str | None = None) -> int:
         return self._exec(
-            "INSERT INTO command_log (ts, source, command, params, result_code, latency_ms, error) VALUES (?,?,?,?,?,?,?)",
-            (iso(), source, command, _txt(params), _txt(result_code), latency_ms, error),
+            "INSERT INTO command_log (ts, source, command, params, result_code, latency_ms, error, via) VALUES (?,?,?,?,?,?,?,?)",
+            (iso(), source, command, _txt(params), _txt(result_code), latency_ms, error, via),
         ).lastrowid
 
     def commands(self, limit: int = 200) -> list[dict]:

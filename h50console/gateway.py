@@ -137,11 +137,17 @@ class Gateway:
         if name in catalog.LEAVES_BASE and reason:
             raise CommandBlocked(f"robô ocupado: {reason} (status {self.cache.get('2/2')})")
 
+    def _send(self, fn: Callable, *args):
+        wake = getattr(self.dev.client, "wake_lan", None)    # comando do usuário: tenta a LAN mesmo na janela da nuvem
+        if wake:
+            wake()
+        return fn(*args)
+
     def _command(self, label: str, params, fn: Callable, *args, source: str = "ui", reread: list[str] = ()):
         t0 = time.perf_counter()
         code, err, res = None, None, None
         try:
-            res = self._call(fn, *args, high=True)
+            res = self._call(self._send, fn, *args, high=True)
             code = res.get("code") if isinstance(res, dict) else 0
             if reread:
                 changes = self.cache.update(self._call(self.dev.values, list(reread), high=True))
@@ -153,8 +159,9 @@ class Gateway:
             err = f"{type(ex).__name__}: {ex}"
             raise
         finally:
-            self.store.log_command(source, label, params, code, int((time.perf_counter() - t0) * 1000), err)
-            self.bus.publish("command", {"command": label, "code": code, "error": err})
+            via = self.via
+            self.store.log_command(source, label, params, code, int((time.perf_counter() - t0) * 1000), err, via)
+            self.bus.publish("command", {"command": label, "code": code, "error": err, "via": via})
             self.poke.set()
 
     def check_start(self) -> None:

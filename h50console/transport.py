@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
 
 from .miio import MiioClient, MiioError
 
@@ -26,6 +27,12 @@ CLOUD_BATCH_BYTES = 2800
 CLOUD_BATCH_ITEMS = 40
 _OK_OR_MISSING = {0, -704040002, -704040003}   # ok; propriedade inexistente / sem acesso de leitura
 LAN_RETRY_AFTER = 60.0             # depois de a LAN falhar, só tenta de novo após este tempo
+# O UDP perde uma resposta de vez em quando (visto em 26/10 no H50 Pro, ao lado do roteador: uma a cada poucos
+# minutos, em pedidos que respondem em ~10 ms). Leitura: duas tentativas de 2 s (o tempo de uma de 4 s) antes
+# de ir para a nuvem. Comando do usuário: dentro da janela da nuvem, sonda a LAN antes (a nuvem já aceitou
+# comando com code 0 que não chegou ao robô).
+LAN_READ_TIMEOUT = 2.0
+LAN_PROBE_TIMEOUT = 1.5
 
 
 class CloudClient:
@@ -141,6 +148,34 @@ class AutoClient:
             log.info("LAN voltou a responder; saindo do modo nuvem")
         return True
 
+    @contextmanager
+    def _lan_timeout(self, seconds: float):
+        """Encurta o timeout do cliente LAN só durante o bloco (as chamadas já vêm serializadas pelo Gateway)."""
+        old = getattr(self.lan_client, "timeout", None)
+        if old is None:
+            yield
+            return
+        self.lan_client.timeout = min(old, seconds)
+        try:
+            yield
+        finally:
+            self.lan_client.timeout = old
+
+    def wake_lan(self) -> None:
+        """Antes de um comando do usuário: dentro da janela da nuvem, sonda a LAN agora (não espera a janela acabar)."""
+        with self._lock:
+            if self.cloud_client is None or not self._lan_down_until:
+                return
+            try:
+                with self._lan_timeout(LAN_PROBE_TIMEOUT):
+                    self.lan_client.handshake(_rediscover=False)
+            except MiioError:
+                log.info("comando: LAN ainda sem resposta; vai pela nuvem")
+                return
+            self._lan_down_until = 0.0
+            self.mode = "lan"
+            log.info("LAN voltou a responder (sondada antes de um comando); saindo do modo nuvem")
+
     def prepare(self) -> None:
         """Decide o transporte ANTES de planejar os lotes (o limite de tamanho depende dele)."""
         with self._lock:
@@ -155,6 +190,9 @@ class AutoClient:
         self.prepare()
         if self.mode == "lan":
             try:
+                if method == "get_properties":                     # leitura: pode repetir sem efeito colateral
+                    with self._lan_timeout(LAN_READ_TIMEOUT):
+                        return self.lan_client.send(method, params, retry=max(retry, 1))
                 return self.lan_client.send(method, params, retry=retry)
             except MiioError:
                 if self.cloud_client is None:

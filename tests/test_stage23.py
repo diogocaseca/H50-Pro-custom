@@ -233,6 +233,7 @@ class PollerTests(unittest.TestCase):
         log = self.store.commands()
         self.assertEqual([c["command"] for c in log], ["set:2/31", "run:locate", "set:2/31"])
         self.assertIn("ValueError", log[0]["error"])
+        self.assertEqual({c["via"] for c in log}, {"lan"})        # por onde cada comando foi
         # base trabalhando: não deixa sair
         self.gw.cache.update({"2/2": 12})
         with self.assertRaises(CommandBlocked):

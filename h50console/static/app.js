@@ -677,6 +677,7 @@
         { key: "params", label: "Parâmetros" },
         { key: "result_code", label: "Código" },
         { key: "latency_ms", label: "ms", num: true },
+        { key: "via", label: "Via", render: (r) => ({ lan: "rede local", cloud: "nuvem" })[r.via] || "—" },
         { key: "error", label: "Erro" },
         { key: "source", label: "Origem" },
       ], cmds);

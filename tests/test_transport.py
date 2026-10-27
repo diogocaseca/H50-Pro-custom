@@ -93,7 +93,7 @@ class CloudClientTests(unittest.TestCase):
 class AutoClientTests(unittest.TestCase):
     def setUp(self):
         self.lan = FakeClient({"2/2": 2, "3/1": 90})
-        self.lan.handshake = lambda: (_ for _ in ()).throw(MiioError("off")) if self.lan.offline else None
+        self.lan.handshake = lambda **_: (_ for _ in ()).throw(MiioError("off")) if self.lan.offline else None
         self.svc = FakeCloudService({"2/2": 4, "3/1": 80})
         self.auto = AutoClient(self.lan, CloudClient(self.svc, "1000000001"), retry_after=0.05)
         self.req = [{"did": "x", "siid": 3, "piid": 1}]
@@ -128,6 +128,35 @@ class AutoClientTests(unittest.TestCase):
         self.auto.send("get_properties", self.req)
         self.assertEqual((self.auto.max_batch_bytes, self.auto.max_batch_items), (2800, 40))   # limites medidos
         self.assertTrue(self.auto.oversize_ok)
+
+    def test_one_lost_read_is_retried_on_lan(self):
+        orig, seen = self.lan.send, []
+        self.lan.timeout = 4.0
+
+        def lossy(method, params=None, retry=1):     # o MiioClient repete sozinho até `retry` vezes
+            seen.append((retry, self.lan.timeout))
+            if not retry:                            # sem nova tentativa, a resposta perdida derruba a LAN
+                raise MiioError("timeout")
+            return orig(method, params, retry)
+        self.lan.send = lossy
+        r = self.auto.send("get_properties", self.req, retry=0)
+        self.assertEqual((r[0]["value"], self.auto.mode), (90, "lan"))
+        self.assertEqual(seen, [(1, 2.0)])           # leitura: uma nova tentativa, 2 s cada
+        self.assertEqual(self.lan.timeout, 4.0)      # o timeout volta ao normal
+        self.assertEqual(self.svc.calls, [])
+
+    def test_command_probes_lan_inside_the_cloud_window(self):
+        self.auto.retry_after = 60
+        self.lan.offline = True
+        self.auto.send("get_properties", self.req)
+        self.assertEqual(self.auto.mode, "cloud")
+        self.auto.wake_lan()                         # LAN ainda fora: continua na nuvem
+        self.assertEqual(self.auto.mode, "cloud")
+        self.lan.offline = False
+        self.auto.wake_lan()                         # voltou: o comando vai pela LAN sem esperar os 60 s
+        self.auto.send("action", {"did": "2/16", "siid": 2, "aiid": 16, "in": ["6"]})
+        self.assertEqual(self.auto.mode, "lan")
+        self.assertEqual(self.lan.calls[-1][0], "action")
 
     def test_without_cloud_raises(self):
         a = AutoClient(self.lan, None)

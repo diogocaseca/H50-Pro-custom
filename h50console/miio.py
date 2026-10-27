@@ -218,6 +218,7 @@ class MiioClient:
                 self._id += 100            # mesma estratégia do python-miio
                 if attempt == retry:
                     raise
+                log.debug("sem resposta ao id=%s (%s); nova tentativa", req_id, method)
                 continue
             log.debug("<< %s", resp)
             if "error" in resp:
