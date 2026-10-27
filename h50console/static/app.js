@@ -678,6 +678,7 @@
         { key: "result_code", label: "Código" },
         { key: "latency_ms", label: "ms", num: true },
         { key: "via", label: "Via", render: (r) => ({ lan: "rede local", cloud: "nuvem" })[r.via] || "—" },
+        { key: "confirmed", label: "Confirmado", render: (r) => r.confirmed == null ? "—" : r.confirmed ? "sim" : "não" },
         { key: "error", label: "Erro" },
         { key: "source", label: "Origem" },
       ], cmds);
@@ -745,6 +746,12 @@
     es.addEventListener("mapdata", async () => { mapData = await api("GET", "/api/map").catch(() => mapData); if (current() === "inicio" && mapData) drawMap(); });
     for (const ev of ["online", "offline"]) es.addEventListener(ev, async () => { await loadState().catch(() => {}); renderHeader(); });
     es.addEventListener("command", () => { if (current() === "diagnostico") refresh(); });
+    // comando de limpeza aceito: o servidor confere se o robô saiu da base (a nuvem já aceitou comando que não chegou)
+    es.addEventListener("command_check", (e) => {
+      const d = JSON.parse(e.data || "{}");
+      if (!d.ok) toast(`O robô aceitou o comando${d.via === "cloud" ? " (via nuvem)" : ""} mas não saiu da base em 1 minuto.`, true);
+      if (current() === "diagnostico") refresh();
+    });
     es.addEventListener("zones", () => { if (current() === "inicio") renderHomeLists(); });
     es.addEventListener("cleaning", () => { if (["historico", "dashboards", "inicio"].includes(current())) refresh(); });
     es.addEventListener("fault", () => { if (current() === "diagnostico") refresh(); });

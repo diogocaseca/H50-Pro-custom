@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,9 @@ from .device import H50
 from .events import EventBus
 from .miio import MiioError
 from .store import Store, iso
+
+log = logging.getLogger(__name__)
+START_CONFIRM_S = 60      # depois de um comando de limpeza aceito, espera o robô sair da base por até este tempo
 
 
 class CommandBlocked(Exception):
@@ -90,6 +94,8 @@ class Gateway:
         self.last_ok: str | None = None
         self.last_latency_ms: int | None = None
         self.poke = threading.Event()         # acorda o poller após um comando
+        self.clock = time.monotonic
+        self.pending_start: dict | None = None   # comando de limpeza aceito, esperando o robô sair da base
 
     # -- núcleo -------------------------------------------------------------------
     def _call(self, fn: Callable, *args, high: bool):
@@ -143,7 +149,8 @@ class Gateway:
             wake()
         return fn(*args)
 
-    def _command(self, label: str, params, fn: Callable, *args, source: str = "ui", reread: list[str] = ()):
+    def _command(self, label: str, params, fn: Callable, *args, source: str = "ui", reread: list[str] = (),
+                 leaves_base: bool = False):
         t0 = time.perf_counter()
         code, err, res = None, None, None
         try:
@@ -160,9 +167,30 @@ class Gateway:
             raise
         finally:
             via = self.via
-            self.store.log_command(source, label, params, code, int((time.perf_counter() - t0) * 1000), err, via)
+            cid = self.store.log_command(source, label, params, code, int((time.perf_counter() - t0) * 1000), err, via)
+            if leaves_base and err is None and code == 0:
+                self.pending_start = {"id": cid, "command": label, "via": via, "since": self.clock()}
             self.bus.publish("command", {"command": label, "code": code, "error": err, "via": via})
             self.poke.set()
+
+    def check_start_confirmed(self) -> None:
+        """Chamado pelo poller a cada ciclo: o robô saiu da base depois do último comando de limpeza aceito?
+
+        A nuvem já aceitou comando (code 0) que não chegou ao robô; sem esta conferência parece que deu certo.
+        """
+        p = self.pending_start
+        if p is None:
+            return
+        if self.cache.get("2/2") in catalog.ACTIVE_STATUS:     # limpando, lavando o mop antes de sair, trocando de tarefa…
+            ok = True
+        elif self.clock() - p["since"] >= START_CONFIRM_S:
+            ok = False
+            log.warning("o robô aceitou %s (via %s) mas não saiu da base em %s s", p["command"], p["via"], START_CONFIRM_S)
+        else:
+            return
+        self.pending_start = None
+        self.store.confirm_command(p["id"], ok)
+        self.bus.publish("command_check", {"command": p["command"], "via": p["via"], "ok": ok})
 
     def check_start(self) -> None:
         """Levanta CommandBlocked se o robô não pode sair da base agora (antes de mudar ajustes para uma limpeza)."""
@@ -173,15 +201,16 @@ class Gateway:
         if name not in catalog.SIMPLE_ACTIONS:
             raise ValueError(f"ação desconhecida: {name}")
         self._check_start(name)
-        return self._command(f"run:{name}", None, self.dev.run, name, source=source)
+        return self._command(f"run:{name}", None, self.dev.run, name, source=source,
+                             leaves_base=name in catalog.LEAVES_BASE)
 
     def clean_rooms(self, ids: list[int], source: str = "ui"):
         self._check_start("start")
-        return self._command("action:2/16", ids, self.dev.clean_rooms, ids, source=source)
+        return self._command("action:2/16", ids, self.dev.clean_rooms, ids, source=source, leaves_base=True)
 
     def clean_zones(self, zones: list, source: str = "ui"):
         self._check_start("start")
-        return self._command("action:2/37", zones, self.dev.clean_zones, zones, source=source)
+        return self._command("action:2/37", zones, self.dev.clean_zones, zones, source=source, leaves_base=True)
 
     def set(self, key: str, value, source: str = "ui"):
         """Grava uma prop e relê para confirmar (o robô pode ajustar o valor).

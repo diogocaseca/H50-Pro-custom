@@ -242,6 +242,35 @@ class PollerTests(unittest.TestCase):
             self.gw.clean_rooms([6])
         self.gw.run("home")                                 # voltar para a base pode
 
+    def test_cleaning_command_waits_for_the_robot_to_leave(self):
+        self.p.tick()
+        self.gw.clock = FakeClock()
+        self.drain()
+        self.gw.clean_rooms([6])                           # aceito (code 0), mas o robô continua na base
+        self.assertIsNotNone(self.gw.pending_start)
+        self.gw.check_start_confirmed()
+        self.assertIsNotNone(self.gw.pending_start)        # ainda dentro do prazo
+        self.gw.clock.t += 61
+        with self.assertLogs("h50console.gateway", "WARNING"):
+            self.gw.check_start_confirmed()
+        self.assertIsNone(self.gw.pending_start)
+        row = self.store.commands()[0]
+        self.assertEqual((row["command"], row["via"], row["confirmed"]), ("action:2/16", "lan", 0))
+        evs = []
+        while not self.events.empty():
+            evs.append(self.events.get_nowait())
+        self.assertIn(("command_check", {"command": "action:2/16", "via": "lan", "ok": False}), evs)
+        # desta vez o robô sai: o poller lê o status novo e confirma
+        self.gw.clean_zones([[0, 1000, 0, 0, 1000, 0, 1000, 1000]])
+        self.fake.values["2/2"] = 4
+        self.clock.t += 100
+        self.p.tick()
+        self.assertIsNone(self.gw.pending_start)
+        self.assertEqual(self.store.commands()[0]["confirmed"], 1)
+        self.gw.run("locate")                              # não sai da base: nada a confirmar
+        self.assertIsNone(self.gw.pending_start)
+        self.assertIsNone(self.store.commands()[0]["confirmed"])
+
     def test_set_with_stale_reread_keeps_written_value(self):
         self.p.tick()
         orig = self.fake.send

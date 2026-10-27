@@ -103,6 +103,10 @@ MIGRATIONS = [
     """
     ALTER TABLE command_log ADD COLUMN via TEXT;
     """,
+    # v5: se o robô saiu da base depois de um comando de limpeza aceito (1/0; vazio = não se aplica)
+    """
+    ALTER TABLE command_log ADD COLUMN confirmed INTEGER;
+    """,
 ]
 
 
@@ -283,6 +287,9 @@ class Store:
             "INSERT INTO command_log (ts, source, command, params, result_code, latency_ms, error, via) VALUES (?,?,?,?,?,?,?,?)",
             (iso(), source, command, _txt(params), _txt(result_code), latency_ms, error, via),
         ).lastrowid
+
+    def confirm_command(self, command_id: int, ok: bool) -> None:
+        self._exec("UPDATE command_log SET confirmed=? WHERE id=?", (int(ok), command_id))
 
     def commands(self, limit: int = 200) -> list[dict]:
         return self._query("SELECT * FROM command_log ORDER BY id DESC LIMIT ?", (limit,))

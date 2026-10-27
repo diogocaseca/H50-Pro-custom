@@ -73,6 +73,7 @@ class Poller:
         try:
             changes = self.gw.read(keys)
         except MiioError as ex:
+            self.gw.check_start_confirmed()                # sem resposta nenhuma também conta o prazo
             wait = min(MAX_BACKOFF, 10 * 2 ** (self.gw.fails - 1))
             log.warning("robô sem resposta (%s falhas): %s; nova tentativa em %ss", self.gw.fails, ex, wait)
             for g in due:
@@ -83,13 +84,14 @@ class Poller:
             self.store.save_changes(changes)
             self.gw.bus.publish("state", {"changes": {k: v[1] for k, v in changes.items()}})
         self._side_effects(changes, due)
+        self.gw.check_start_confirmed()
 
         mode = 0 if self.active() else 1
         factor = 3 if self.gw.via == "cloud" else 1       # a nuvem é mais lenta e tem limite de uso
         for g in due:
             self.next_due[g] = now + catalog.POLL_GROUPS[g][1][mode] * factor
-        # se o robô acabou de ficar ativo, o grupo rápido passa a valer o intervalo curto já
-        if mode == 0:
+        # robô ativo, ou esperando ele sair da base depois de um comando: o grupo rápido vale o intervalo curto
+        if mode == 0 or self.gw.pending_start:
             self.next_due["fast"] = min(self.next_due["fast"], now + catalog.POLL_GROUPS["fast"][1][0] * factor)
         return max(0.5, min(self.next_due.values()) - now)
 
