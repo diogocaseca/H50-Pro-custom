@@ -95,14 +95,16 @@
     }
     // trajetória
     if (m.path.length > 1) {
-      // tipo 1 = limpando, 0 = deslocamento; o caminho da base até a área vem como um salto sem pontos
-      // intermediários: quebra a linha em saltos > 1 m para não riscar o mapa em diagonal
+      // tipo 1 = limpando, 0 = deslocamento. O robô grava só os pontos de virada: uma faixa reta de 3 m são dois
+      // pontos, e entre pontos de limpeza a linha é sempre ligada. O caminho da base até a área vem como um salto
+      // sem pontos intermediários: no deslocamento, saltos > 1 m quebram a linha para não riscar o mapa em diagonal
       g.beginPath();
       let prev = null;
-      for (const [x, y] of m.path) {
-        if (prev && Math.hypot(x - prev[0], y - prev[1]) <= 1000) g.lineTo(X(x), Y(y));
+      for (const [x, y, type] of m.path) {
+        const cleaning = type === 1 && prev?.[2] === 1;
+        if (prev && (cleaning || Math.hypot(x - prev[0], y - prev[1]) <= 1000)) g.lineTo(X(x), Y(y));
         else g.moveTo(X(x), Y(y));
-        prev = [x, y];
+        prev = [x, y, type];
       }
       g.strokeStyle = dark ? "rgba(240,239,236,.55)" : "rgba(11,11,11,.45)";
       g.lineWidth = 1; g.lineJoin = g.lineCap = "round"; g.stroke();
