@@ -24,7 +24,7 @@
   const ZOOM_MAX = 5, MAX_SIDE = 8192, MAX_AREA = 40e6;
 
   async function render(host, m, opts = {}) {
-    const { onHover, onRoomClick, selected, heat, dim, onPoint, marks, zones, onDraw, view } = opts;
+    const { onHover, onRoomClick, selected, heat, dim, onPoint, marks, zones, onZoneEdit, zoneMin = 300, view } = opts;
     const grid = m._grid || (m._grid = await inflate(m.grid_zlib_b64));
     const sel = selected && selected.size ? selected : null;   // com seleção, o resto fica apagado
     const faint = dim && !sel;                                  // mapa de calor: cômodos quase apagados
@@ -141,16 +141,17 @@
 
     // zonas de limpeza (mm, [x1,y1,x2,y2]): retângulo na cor de destaque, numerado, com o tamanho em metros
     const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2f6fde";
-    const zoneRect = (ctx, [x1, y1, x2, y2], text) => {
+    const zoneRect = (ctx, [x1, y1, x2, y2], text, strong) => {
       const l = X(Math.min(x1, x2)), r = X(Math.max(x1, x2)), t = Y(Math.max(y1, y2)), b = Y(Math.min(y1, y2));
       ctx.save();
-      ctx.fillStyle = accent; ctx.globalAlpha = 0.22; ctx.fillRect(l, t, r - l, b - t);
-      ctx.globalAlpha = 1; ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(l, t, r - l, b - t);
+      ctx.fillStyle = accent; ctx.globalAlpha = strong ? 0.36 : 0.22; ctx.fillRect(l, t, r - l, b - t);
+      ctx.globalAlpha = 1; ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.setLineDash(strong ? [] : [6, 4]); ctx.strokeRect(l, t, r - l, b - t);
       ctx.restore();
       if (text) label(ctx, text, (l + r) / 2, (t + b) / 2, ink, dark, 11, true);
     };
     const size = ([x1, y1, x2, y2]) => `${(Math.abs(x2 - x1) / 1000).toFixed(1).replace(".", ",")} × ${(Math.abs(y2 - y1) / 1000).toFixed(1).replace(".", ",")} m`;
-    (zones || []).forEach((z, i) => zoneRect(g, z, `${i + 1} · ${size(z)}`));
+    // editáveis (onZoneEdit): vão numa camada por cima, redesenhada a cada movimento (ver abaixo)
+    if (!onZoneEdit) (zones || []).forEach((z, i) => zoneRect(g, z, `${i + 1} · ${size(z)}`));
 
     // marcadores do editor (mm): círculo com cruz
     for (const [x, y] of marks || []) {
@@ -216,20 +217,77 @@
         `width:${Math.min(box, cw * scale0 + 2)}px;height:${ch * scale0 + 16}px`;
     }
 
-    // desenhar zona: arrastar na tela (dedo ou mouse) faz um retângulo; ao soltar, devolve [x1,y1,x2,y2] em mm
+    const toMm = (px, py) => [Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res)];
+    const at = (e) => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const cssW = cw * scale, cssH = ch * scale;
+    const [minX, maxY] = toMm(0, 0), [maxX, minY] = toMm(cssW, cssH);      // o mapa visível, em mm
+
+    // zonas editáveis: arrastar dentro move, arrastar num canto muda o tamanho; ao soltar, onZoneEdit(i, [x1,y1,x2,y2])
+    const edits = onZoneEdit ? (zones || []).map((z) => [...z]) : null;
     let og = null;
-    if (onDraw) {
+    if (edits) {
       const over = document.createElement("canvas");
       over.style.cssText = `position:absolute;left:0;top:0;width:${cv.style.width};height:${cv.style.height};pointer-events:none`;
       over.width = cv.width; over.height = cv.height;
       og = over.getContext("2d");
       og.scale(dpr, dpr);
       holder.append(over);
-      cv.style.cursor = "crosshair";
     }
-    const toMm = (px, py) => [Math.round(ox + (px / scale + c0 - 0.5) * res), Math.round(oy + (r1 + 0.5 - py / scale) * res)];
-    const at = (e) => { const b = cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
-    const clearDraw = () => og && og.clearRect(0, 0, cv.width, cv.height);
+    // cantos em px de tela, cada um com o canto oposto (que fica parado) em mm
+    const corners = ([x1, y1, x2, y2]) => {
+      const lx = Math.min(x1, x2), hx = Math.max(x1, x2), ly = Math.min(y1, y2), hy = Math.max(y1, y2);
+      return [[X(lx), Y(hy), hx, ly], [X(hx), Y(hy), lx, ly], [X(lx), Y(ly), hx, hy], [X(hx), Y(ly), lx, hy]];
+    };
+    const drawZones = (active = -1) => {
+      if (!og) return;
+      og.clearRect(0, 0, cssW, cssH);
+      edits.forEach((z, i) => {
+        zoneRect(og, z, `${i + 1} · ${size(z)}`, i === active);
+        for (const [cx, cy] of corners(z)) {
+          og.beginPath(); og.arc(cx, cy, 6, 0, 2 * Math.PI);
+          og.fillStyle = dark ? "#1c2028" : "#fff"; og.fill(); og.strokeStyle = accent; og.lineWidth = 2; og.stroke();
+        }
+      });
+    };
+    drawZones();
+    // o que está sob o ponteiro: canto (de qualquer zona) antes do miolo; a última zona fica por cima
+    const hitZone = ([px, py], touch) => {
+      if (!edits) return null;
+      const grab = touch ? 22 : 12;
+      for (let i = edits.length - 1; i >= 0; i--) {
+        for (const [cx, cy, fx, fy] of corners(edits[i])) {
+          if (Math.hypot(px - cx, py - cy) <= grab) return { i, kind: "resize", fixed: [fx, fy], ns: (cx < X(fx)) === (cy < Y(fy)) };
+        }
+      }
+      for (let i = edits.length - 1; i >= 0; i--) {
+        const [[l, t], , , [r, b]] = corners(edits[i]);
+        if (px >= l && px <= r && py >= t && py <= b) return { i, kind: "move" };
+      }
+      return null;
+    };
+    const moveZone = (edit, dx, dy, [px, py]) => {
+      const [x1, y1, x2, y2] = edit.orig;
+      if (edit.kind === "move") {                       // preso às bordas do mapa
+        const mx = clamp((dx / scale) * res, minX - Math.min(x1, x2), maxX - Math.max(x1, x2));
+        const my = clamp((-dy / scale) * res, minY - Math.min(y1, y2), maxY - Math.max(y1, y2));
+        edits[edit.i] = [x1 + mx, y1 + my, x2 + mx, y2 + my].map(Math.round);
+        return;
+      }
+      const [fx, fy] = edit.fixed;
+      let [mx, my] = toMm(clamp(px, 0, cssW), clamp(py, 0, cssH));
+      if (Math.abs(mx - fx) < zoneMin) mx = fx + (mx < fx ? -zoneMin : zoneMin);
+      if (Math.abs(my - fy) < zoneMin) my = fy + (my < fy ? -zoneMin : zoneMin);
+      edits[edit.i] = [Math.min(fx, mx), Math.min(fy, my), Math.max(fx, mx), Math.max(fy, my)];
+    };
+    if (edits && edits.length) {                     // cursor: mão nas zonas, setas nos cantos
+      const idle = cv.style.cursor;
+      cv.addEventListener("pointermove", (e) => {
+        if (pts.size) return;
+        const h = hitZone(at(e), e.pointerType === "touch");
+        cv.style.cursor = !h ? idle : h.kind === "move" ? "move" : h.ns ? "nwse-resize" : "nesw-resize";
+      });
+    }
 
     // zoom em volta de um ponto da tela (clientX/Y): guarda onde o ponto está no mapa e redesenha na escala nova
     const setZoom = (z, clientX, clientY) => {
@@ -244,16 +302,16 @@
     };
     const center = () => { const wr = wrap.getBoundingClientRect(); return [wr.left + wr.width / 2, wr.top + wr.height / 2]; };
 
-    // gestos: 1 dedo/mouse = desenhar (modo zona), mover o mapa (com zoom) ou tocar; 2 dedos = pinça
+    // gestos: 1 dedo/mouse = mexer numa zona, mover o mapa (com zoom) ou tocar; 2 dedos = pinça
     const pts = new Map();
-    let mode = null, drawStart = null, start = null, scroll0 = null, pinch = null;
+    let mode = null, edit = null, start = null, scroll0 = null, pinch = null;
     const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); };
     const mid = () => { const [a, b] = [...pts.values()]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; };
     cv.addEventListener("pointerdown", (e) => {
       pts.set(e.pointerId, [e.clientX, e.clientY]);
       try { cv.setPointerCapture(e.pointerId); } catch { /* ponteiro já solto */ }
       if (pts.size === 2 && view) {
-        drawStart = null; clearDraw();
+        if (edit) { edits[edit.i] = edit.orig; edit = null; drawZones(); }   // a pinça desfaz o arrasto da zona
         const [mx, my] = mid(), b = cv.getBoundingClientRect();
         pinch = { d: dist(), mx, my, ox: mx - b.left, oy: my - b.top };
         mode = "pinch"; gesture.moved = true;
@@ -261,7 +319,8 @@
       }
       if (pts.size > 1) return;
       gesture.moved = false; start = [e.clientX, e.clientY];
-      if (onDraw) { mode = "draw"; drawStart = at(e); e.preventDefault(); }
+      const hit = hitZone(at(e), e.pointerType === "touch");
+      if (hit) { mode = "zone"; edit = { ...hit, orig: [...edits[hit.i]] }; e.preventDefault(); drawZones(hit.i); }
       else if (view && zoom > 1) { mode = "pan"; scroll0 = [wrap.scrollLeft, wrap.scrollTop]; }
       else mode = "tap";
     });
@@ -276,10 +335,9 @@
       if (!start) return;
       const dx = e.clientX - start[0], dy = e.clientY - start[1];
       if (Math.hypot(dx, dy) > 6) gesture.moved = true;
-      if (mode === "draw" && drawStart) {
-        const [px, py] = at(e), r = [...toMm(...drawStart), ...toMm(px, py)];
-        clearDraw();
-        zoneRect(og, r, size(r));
+      if (mode === "zone" && edit) {
+        moveZone(edit, dx, dy, at(e));
+        drawZones(edit.i);
       } else if (mode === "pan") {
         wrap.scrollLeft = scroll0[0] - dx; wrap.scrollTop = scroll0[1] - dy;
       }
@@ -297,13 +355,16 @@
         return;
       }
       pts.delete(e.pointerId);
-      if (mode === "draw" && drawStart && !cancel) {
-        const [px, py] = at(e), [sx, sy] = drawStart;
-        clearDraw();
-        if (Math.abs(px - sx) >= 8 && Math.abs(py - sy) >= 8) onDraw([...toMm(sx, sy), ...toMm(px, py)]);
+      if (mode === "zone" && edit) {
+        const { i, orig } = edit;
+        edit = null;
+        if (cancel || !gesture.moved) { edits[i] = orig; drawZones(); }
+        else {
+          const [x1, y1, x2, y2] = edits[i];
+          onZoneEdit(i, [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)]);
+        }
       }
-      clearDraw();
-      drawStart = null; start = null;
+      start = null;
       if (!pts.size) mode = null;
     };
     cv.addEventListener("pointerup", (e) => end(e, false));
@@ -345,6 +406,16 @@
       wrap.scrollLeft = holder.offsetLeft + a.u * cw * scale - a.vx;
       wrap.scrollTop = holder.offsetTop + a.v * ch * scale - a.vy;
     }
+    // zona nova de `side` mm no centro da parte visível do mapa (com zoom, onde o usuário rolou). Fica em `view`
+    // porque o zoom redesenha o mapa por dentro: quem chama não recebe o desenho novo
+    const newZone = (side) => {
+      const b = cv.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+      const [cx, cy] = toMm(clamp(wr.left + wr.width / 2 - b.left, 0, cssW), clamp(wr.top + wr.height / 2 - b.top, 0, cssH));
+      const h = side / 2;
+      const x = clamp(cx, minX + h, Math.max(minX + h, maxX - h)), y = clamp(cy, minY + h, Math.max(minY + h, maxY - h));
+      return [x - h, y - h, x + h, y + h].map(Math.round);
+    };
+    if (view) view.newZone = newZone;
     return { area_m2: (grid.filter((v) => v > 1).length * res * res) / 1e6 };
   }
 

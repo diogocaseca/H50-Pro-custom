@@ -81,7 +81,7 @@
   // ---- estado compartilhado --------------------------------------------------------------
   let state = null, appInfo = null, settings = null, mapData = null, cloud = null, robots = [];
   const areaSel = new Set();                       // cômodos escolhidos em "Área" (vazio = casa inteira)
-  let zoneSel = [], zoneId = null, drawing = false, savedZones = [];   // zonas [x1,y1,x2,y2] (mm); zoneId = zona salva
+  let zoneSel = [], zoneId = null, savedZones = [];   // zonas [x1,y1,x2,y2] (mm); zoneId = zona salva
   const mapView = { zoom: 1, anchor: null };       // zoom do mapa do Início: sobrevive aos redesenhos
   const V = (k) => state?.values?.[k];
   const CLEANING = new Set([4, 10, 16, 17]), PAUSED = new Set([5, 18]), RETURNING = new Set([6, 19, 20, 21, 24]);
@@ -226,26 +226,34 @@
       selected: areaSel,
       zones: zoneSel,
       view: mapView,
-      onRoomClick: drawing ? undefined : toggleRoom,
-      onDraw: drawing ? addZone : undefined,
+      zoneMin: ZONE_MIN,
+      onZoneEdit: zoneId ? undefined : editZone,        // zona salva: só para ver
+      onRoomClick: zoneSel.length ? undefined : toggleRoom,
       onHover: (e, name) => {
-        hover.textContent = drawing ? "Arraste no mapa para desenhar a zona" : e && name ? `${name} · clique para escolher` : " ";
+        hover.textContent = !e ? " " : zoneId ? "Zona salva: só para ver. \"+ Zona\" começa uma seleção nova"
+          : zoneSel.length ? "Arraste a zona para mover ou um canto para mudar o tamanho"
+          : name ? `${name} · clique para escolher` : " ";
       },
     });
     renderZoneTools();
   }
 
-  // ---- zonas: desenhar no mapa, salvar com nome (admin) e limpar ----------------------------------------------
-  const ZONE_MIN = 300, ZONE_WARN = 700;
+  // ---- zonas: adicionar e ajustar no mapa, salvar com nome (admin) e limpar ------------------------------------
+  const ZONE_MIN = 300, ZONE_WARN = 700, ZONE_NEW = 1500;
   let zoneLimit = 3;                                        // aba Configurações (GET /api/zones/limit)
-  function addZone(rect) {
-    const [x1, y1, x2, y2] = rect, w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
-    if (Math.min(w, h) < ZONE_MIN) return toast("Zona pequena demais: cada lado precisa ter ao menos 0,3 m.", true);
-    if (zoneId) { zoneSel = []; zoneId = null; }                // editar uma zona salva vira uma seleção nova
+  const zoneSide = ([x1, y1, x2, y2]) => Math.min(Math.abs(x2 - x1), Math.abs(y2 - y1));
+  function addZone() {
+    if (!mapView.newZone) return;
+    if (zoneId) { zoneSel = []; zoneId = null; }                // com uma zona salva escolhida, começa uma seleção nova
     if (zoneSel.length >= zoneLimit) return toast(`No máximo ${zoneLimit} zona(s) por limpeza (limite da aba Configurações).`, true);
     areaSel.clear();
-    zoneSel.push(rect);
-    if (Math.min(w, h) < ZONE_WARN) toast("Zona com menos de 0,7 m de lado: o robô pode recusar.");
+    zoneSel.push(mapView.newZone(ZONE_NEW));
+    toggleRefresh();
+  }
+
+  function editZone(i, rect) {
+    if (zoneSide(rect) < ZONE_WARN && zoneSide(zoneSel[i]) >= ZONE_WARN) toast("Zona com menos de 0,7 m de lado: o robô pode recusar.");
+    zoneSel[i] = rect;
     toggleRefresh();
   }
 
@@ -253,8 +261,8 @@
     const box = $("#zone-tools");
     box.hidden = !mapData;
     if (!mapData) return;
-    const draw = el("button", { className: drawing ? "primary" : "", textContent: drawing ? "Concluir" : "Desenhar zona" });
-    draw.onclick = () => { drawing = !drawing; drawMap(); };
+    const add = el("button", { textContent: "+ Zona", title: "Põe uma zona no meio da parte visível do mapa" });
+    add.onclick = addZone;
     const chips = zoneSel.map((z, i) => {
       const x = el("button", { className: "chip on", title: "Tirar esta zona", textContent: `${i + 1} ✕` });
       x.onclick = () => { zoneSel.splice(i, 1); zoneId = null; toggleRefresh(); };
@@ -262,7 +270,7 @@
     });
     const save = el("button", { id: "zone-save", textContent: "Salvar zona" });
     save.onclick = saveZone;
-    box.replaceChildren(draw, ...chips, ...(zoneSel.length && !zoneId ? [save] : []));
+    box.replaceChildren(add, ...chips, ...(zoneSel.length && !zoneId ? [save] : []));
   }
 
   function saveZone() {
@@ -421,7 +429,7 @@
       el("p", { className: "muted small", textContent: "Também dá para tocar nos cômodos do mapa." }),
       ...(savedZones.length ? [el("div", { className: "card-label", textContent: "Zonas salvas" }), el("div", { className: "choices" }, ...zbtns),
         el("div", { className: "chips zone-dels" }, ...dels)] : []),
-      el("p", { className: "muted small", textContent: "Para uma zona nova, use \"Desenhar zona\" abaixo do mapa." }),
+      el("p", { className: "muted small", textContent: "Para uma zona nova, use \"+ Zona\" abaixo do mapa." }),
     ], { confirm: () => {
       if (!touched) return;
       areaSel.clear(); draft.forEach((id) => areaSel.add(id));
@@ -787,7 +795,7 @@
     return robots;
   }
   function resetCaches() {
-    state = null; settings = null; mapData = null; roomsCache = null; areaSel.clear(); zoneSel = []; zoneId = null; drawing = false;
+    state = null; settings = null; mapData = null; roomsCache = null; areaSel.clear(); zoneSel = []; zoneId = null;
     mapView.zoom = 1; mapView.anchor = null;
     for (const k of Object.keys(prevRaw)) delete prevRaw[k];
   }
