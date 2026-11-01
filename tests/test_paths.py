@@ -70,6 +70,35 @@ class Recorder(unittest.TestCase):
         self.assertEqual(again.key, key)
 
 
+class LiveMap(unittest.TestCase):
+    def test_download_while_cleaning_becomes_the_home_map(self):
+        import json
+        from h50console.paths import make_fetch
+
+        class Bus:
+            def __init__(self): self.events = []
+            def publish(self, ev, payload): self.events.append(ev)
+
+        class Service:                                         # o mesmo contrato do CloudService
+            state = "ok"
+            def __init__(self): self.calls = []
+            def fetch_map(self, obj, did, map_dir, model=""):
+                self.calls.append((obj, did, map_dir, model))
+                (map_dir / "latest.json").write_text(json.dumps({"path": [[1, 2, 1]]}))
+            def latest_map(self, map_dir):
+                return json.loads((map_dir / "latest.json").read_text())
+
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            gw, svc = FakeGw(), Service()
+            gw.bus, gw.cache["10/1"] = Bus(), json.dumps({"index": 1, "obj_name": "u/42/0"})
+            fetch = make_fetch(gw, svc, lambda: 42, lambda: "m", map_dir=Path(d))
+            self.assertEqual(fetch(), [[1, 2, 1]])
+            self.assertEqual(svc.calls, [("u/42/0", "42", Path(d), "m")])
+            self.assertEqual(gw.bus.events, ["mapdata"])               # a tela do Início redesenha
+
+
 class Coverage(unittest.TestCase):
     def test_counts_each_cleaning_once_per_cell(self):
         import time

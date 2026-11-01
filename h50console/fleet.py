@@ -142,7 +142,7 @@ class Robot:
             history.start_sync(self.bus, self.fleet.cloud, self.store, lambda: self.cfg.did or None, stop=self._stop)
             self.path_recorder = paths.PathRecorder(
                 self.gw, self.store, paths.make_fetch(self.gw, self.fleet.cloud, lambda: self.cfg.did or None,
-                                                      lambda: self.cfg.model))
+                                                      lambda: self.cfg.model, map_dir=self.map_dir))
             paths.start(self.bus, self.path_recorder, stop=self._stop)
             threading.Thread(target=self._learn_did, name=f"did-{self.cfg.id}", daemon=True).start()
 

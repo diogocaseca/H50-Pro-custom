@@ -82,13 +82,21 @@ class PathRecorder:
         return False
 
 
-def make_fetch(gw, service, did_fn, model_fn):
-    """Baixa o mapa atual (10/1) pela nuvem e devolve só a trajetória."""
+def make_fetch(gw, service, did_fn, model_fn, map_dir=None):
+    """Baixa o mapa atual (10/1) pela nuvem e devolve só a trajetória.
+
+    Com `map_dir`, o mapa baixado também vira o mapa do Início (latest.json) e o evento `mapdata` redesenha a tela:
+    assim o mapa acompanha a limpeza sem depender de o navegador ver o 10/1 mudar.
+    """
     def fetch():
         did = did_fn()
         obj = decoders.parse_json(gw.cache.get("10/1"), {}).get("obj_name")
         if not (did and obj) or service.state != "ok":
             return None
+        if map_dir is not None:
+            service.fetch_map(obj, str(did), map_dir, model=model_fn())
+            gw.bus.publish("mapdata", {"at": int(time.time())})
+            return (service.latest_map(map_dir) or {}).get("path")
         raw = service.fetch_object(obj, str(did))
         return mapdecode.for_ui(mapdecode.decrypt(raw, model_fn(), str(did)))["path"]
     return fetch
