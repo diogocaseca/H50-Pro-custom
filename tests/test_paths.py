@@ -6,7 +6,7 @@ from h50console.store import Store
 
 class FakeGw:
     def __init__(self):
-        self.cache = {"2/2": 2}
+        self.cache = {"2/2": 2, "10/1": '{"index": 1, "obj_name": "u/42/0"}'}
 
 
 class Recorder(unittest.TestCase):
@@ -19,6 +19,9 @@ class Recorder(unittest.TestCase):
     def path(self, n, x0=0):
         return [[x0 + i * 100, i * 50, 1] for i in range(n)]
 
+    def new_map(self, index):                                  # o robô enviou um mapa novo para a nuvem
+        self.gw.cache["10/1"] = f'{{"index": {index}, "obj_name": "u/42/0"}}'
+
     def test_idle_robot_downloads_nothing(self):
         self.maps = [self.path(5)]
         self.assertFalse(self.rec.tick())
@@ -28,10 +31,10 @@ class Recorder(unittest.TestCase):
         self.gw.cache["2/2"] = 4
         self.maps = [self.path(5), self.path(9), self.path(20)]
         self.assertTrue(self.rec.tick())
-        self.now[0] += 10
-        self.assertFalse(self.rec.tick())                      # throttle: menos de 45 s
-        self.now[0] += 40
-        self.assertTrue(self.rec.tick())
+        self.now[0] += 20
+        self.assertFalse(self.rec.tick())                      # mapa igual (index do 10/1) e menos de 45 s
+        self.new_map(2)
+        self.assertTrue(self.rec.tick())                       # mapa novo: baixa na hora
         self.assertEqual(self.store.get_path(self.rec.key)["points"], self.path(9))
         self.gw.cache["2/2"] = 2
         self.assertTrue(self.rec.finish(555))                  # fim: o início oficial vem do 2/17
@@ -39,6 +42,50 @@ class Recorder(unittest.TestCase):
         self.assertEqual((len(got["points"]), got["final"]), (20, True))
         self.assertEqual(self.store.path_stimes(), {555})      # a chave provisória sumiu
         self.assertIsNone(self.rec.key)
+
+    def test_without_new_map_downloads_again_after_45s(self):
+        self.gw.cache["2/2"] = 4
+        self.maps = [self.path(5), self.path(8)]
+        self.assertTrue(self.rec.tick())
+        self.now[0] += 44
+        self.assertFalse(self.rec.tick())
+        self.now[0] += 1
+        self.assertTrue(self.rec.tick())                       # reserva: o robô pode não trocar o index
+
+    def test_new_maps_in_a_row_wait_the_minimum_gap(self):
+        self.gw.cache["2/2"] = 4
+        self.maps = [self.path(5), self.path(8)]
+        self.assertTrue(self.rec.tick())
+        self.new_map(2)
+        self.now[0] += 5
+        self.assertFalse(self.rec.tick())                      # menos de 10 s desde o último download
+        self.now[0] += 5
+        self.assertTrue(self.rec.tick())
+
+    def test_outside_a_cleaning_updates_the_map_but_records_no_path(self):
+        self.gw.cache["2/2"] = 7                               # lavando o mop na base, sem limpeza em andamento
+        self.maps = [self.path(5), self.path(6)]
+        self.assertTrue(self.rec.tick())                       # primeiro index visto conta como mapa novo
+        self.assertEqual((self.rec.key, self.store.path_stimes()), (None, set()))
+        self.now[0] += 100
+        self.assertFalse(self.rec.tick())                      # sem limpeza não há reserva por tempo
+        self.new_map(2)
+        self.assertTrue(self.rec.tick())
+
+    def test_way_back_to_the_base_still_feeds_the_cleaning_path(self):
+        self.gw.cache["2/2"] = 4
+        self.maps = [self.path(5), self.path(9)]
+        self.rec.tick()
+        self.gw.cache["2/2"] = 6                               # voltando para a base
+        self.new_map(2)
+        self.now[0] += 15
+        self.assertTrue(self.rec.tick())
+        self.assertEqual(self.store.get_path(self.rec.key)["points"], self.path(9))
+
+    def test_10_1_is_read_with_the_fast_group(self):
+        from h50console import catalog
+        self.assertIn("10/1", catalog.POLL_GROUPS["fast"][0])
+        self.assertNotIn("10/1", catalog.POLL_GROUPS["edits"][0])
 
     def test_final_failure_keeps_last_partial_under_official_key(self):
         self.gw.cache["2/2"] = 4

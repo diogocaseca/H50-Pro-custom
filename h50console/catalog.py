@@ -357,11 +357,12 @@ def status_group(status) -> str:
 # ---------------------------------------------------------------------------
 POLL_GROUPS: dict[str, tuple[list[str], tuple[int, int]]] = {
     "fast": (["2/2", "2/3", "2/96", "2/89", "2/6", "2/7", "3/1", "3/2", "2/18", "2/88", "2/90",
-              "2/97", "2/98", "2/5", "2/26", "2/40", "2/66", "2/67", "2/17", "11/3"], (5, 30)),
+              "2/97", "2/98", "2/5", "2/26", "2/40", "2/66", "2/67", "2/17", "11/3",
+              "10/1"], (5, 30)),    # 10/1: o index muda quando o robô envia um mapa novo (paths.py baixa na hora)
     # ajustes: o usuário pode mudar pelo app oficial a qualquer momento; ~45 props = 3 lotes (<200 ms)
     "settings": ([s[0] for s in SETTINGS] + ["2/62", "2/68", "2/21", "2/22"], (30, 30)),
     # o que se edita no app e é maior (JSON): rotinas, agenda, móveis, mapa
-    "edits": (["2/42", "2/19", "2/102", "10/13", "10/1", "10/2"], (60, 60)),
+    "edits": (["2/42", "2/19", "2/102", "10/13", "10/2"], (60, 60)),
     "consumables": ([k for pair in CONSUMABLE_PROPS.values() for k in pair], (1800, 1800)),
     "structure": (["2/16", "10/5", "10/6", "2/1", "23/1", "15/2"], (3600, 3600)),
 }

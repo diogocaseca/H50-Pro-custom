@@ -1,8 +1,10 @@
 """Grava o caminho percorrido em cada limpeza.
 
 O robô só guarda a trajetória da limpeza atual/última (dentro do mapa 10/1, na nuvem) e a apaga na próxima. Então o app:
-  * durante a limpeza baixa o mapa de tempos em tempos (no mínimo `interval` s entre downloads) e guarda os pontos sob uma
-    chave provisória (o instante em que viu a limpeza começar);
+  * com o robô em atividade baixa o mapa quando o `index` do 10/1 muda (o robô enviou um mapa novo, cerca de 1 vez por
+    minuto) ou, durante uma limpeza, quando passa `interval` s sem mapa novo; nunca com menos de `min_gap` s entre
+    downloads. Os pontos vão para uma chave provisória (o instante em que viu a limpeza começar); fora de uma limpeza
+    (ex.: lavagem manual do mop) só o mapa do Início é atualizado;
   * quando a limpeza termina (evento `cleaning`, com o início oficial vindo do 2/17) espera `settle` s para o robô
     enviar o mapa final, baixa de novo e grava como definitivo, trocando a chave provisória pelo início oficial.
 Só vale para limpezas feitas com o app rodando e a conta da nuvem conectada.
@@ -16,6 +18,7 @@ import threading
 import time
 
 from . import decoders, mapdecode
+from .catalog import ACTIVE_STATUS
 from .poller import CLEANING
 
 log = logging.getLogger(__name__)
@@ -26,32 +29,41 @@ def _signature(points: list) -> tuple:
 
 
 class PathRecorder:
-    def __init__(self, gw, store, fetch, interval: float = 45, settle: float = 60, clock=time.time):
+    def __init__(self, gw, store, fetch, interval: float = 45, settle: float = 60, min_gap: float = 10,
+                 clock=time.time):
         self.gw, self.store, self.fetch = gw, store, fetch     # fetch() -> lista de [x, y, tipo] ou None
-        self.interval, self.settle, self.clock = interval, settle, clock
+        self.interval, self.settle, self.min_gap, self.clock = interval, settle, min_gap, clock
         self.key: int | None = store.get_setting("path_live_key")
         self._last_fetch = 0.0
+        self._index = None                     # index do 10/1 no último download
         self._stale: tuple | None = None       # caminho do mapa anterior: não vale como o desta limpeza
 
     def _fresh(self, pts):
         return pts if pts and _signature(pts) != self._stale else None
 
+    def _map_index(self):
+        return decoders.parse_json(self.gw.cache.get("10/1"), {}).get("index")
+
     def tick(self) -> bool:
-        """Chamado a cada poucos segundos. True se baixou o mapa."""
-        active = self.gw.cache.get("2/2") in CLEANING
-        if not active:
+        """Chamado a cada poucos segundos e quando o 10/1 muda. True se baixou o mapa."""
+        status = self.gw.cache.get("2/2")
+        if status not in ACTIVE_STATUS:
             return False
         now = self.clock()
-        if self.key is None:
+        if status in CLEANING and self.key is None:
             self.key = int(now)
             self.store.set_setting("path_live_key", self.key)
             old = self.store.get_path(self._latest_final() or 0)
             self._stale = _signature(old["points"]) if old else None
-        if now - self._last_fetch < self.interval:
+        index = self._map_index()
+        since = now - self._last_fetch
+        new_map = index is not None and index != self._index
+        # a reserva por tempo só vale numa limpeza: a base trabalhando (lavar o mop...) não troca o mapa
+        if since < self.min_gap or not (new_map or (self.key is not None and since >= self.interval)):
             return False
-        self._last_fetch = now
+        self._last_fetch, self._index = now, index
         pts = self._fresh(self._safe_fetch())
-        if pts:
+        if pts and self.key is not None:
             self.store.save_path(self.key, pts)
         return True
 
@@ -68,6 +80,7 @@ class PathRecorder:
 
     def finish(self, stime: int) -> bool:
         """A limpeza que começou em `stime` acabou: grava o caminho final."""
+        self._index = self._map_index()
         pts = self._fresh(self._safe_fetch())
         key, self.key = self.key, None
         self.store.set_setting("path_live_key", None)
@@ -118,7 +131,8 @@ def start(bus, recorder: PathRecorder, stop: threading.Event | None = None) -> t
                     if stop.wait(recorder.settle):
                         break
                     recorder.finish(int(payload["stime"]))
-                elif time.monotonic() - last_tick >= 5:      # eventos de estado chegam sem parar: não depender do timeout
+                elif (event == "state" and "10/1" in ((payload or {}).get("changes") or {})) \
+                        or time.monotonic() - last_tick >= 5:  # eventos de estado chegam sem parar: não depender do timeout
                     last_tick = time.monotonic()
                     recorder.tick()
             except Exception:  # noqa: BLE001

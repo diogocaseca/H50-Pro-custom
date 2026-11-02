@@ -733,9 +733,7 @@
     streams.push(es);
     es.addEventListener("state", async (e) => {
       const d = JSON.parse(e.data || "{}");
-      // durante a limpeza o 10/1 muda a cada ~1 min: com o Início aberto, baixa o mapa novo
-      if (current() === "inicio" && cloud?.state === "ok" && d.changes && "10/1" in d.changes)
-        api("POST", "/api/cloud/map").then(async () => { mapData = await api("GET", "/api/map"); drawMap(); }).catch(() => {});
+      // mapa novo durante a limpeza (10/1 mudou): quem baixa é o servidor, e o evento "mapdata" redesenha
       // aplica as mudanças direto (sem rebuscar o estado inteiro a cada 5 s durante a limpeza);
       // só rebusca quando muda algo que o servidor rotula (status, base) ou a cada 15 s
       const ch = d.changes || {};
