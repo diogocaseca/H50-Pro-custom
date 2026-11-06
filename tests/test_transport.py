@@ -158,6 +158,21 @@ class AutoClientTests(unittest.TestCase):
         self.assertEqual(self.auto.mode, "lan")
         self.assertEqual(self.lan.calls[-1][0], "action")
 
+    def test_without_internet_a_read_goes_back_to_the_lan(self):
+        self.auto.retry_after = 60
+        self.lan.offline = True
+        self.auto.send("get_properties", self.req)                 # LAN perdeu uma resposta: janela da nuvem
+        self.assertEqual(self.auto.mode, "cloud")
+        self.svc.api = lambda *a, **k: (_ for _ in ()).throw(OSError("[Errno -3] Try again"))   # e a internet caiu
+        with self.assertRaises(MiioError):                          # sem LAN nem nuvem: MiioError (não exceção solta)
+            self.auto.send("get_properties", self.req)
+        self.lan.offline = False
+        r = self.auto.send("get_properties", self.req)              # a LAN responde: sai da janela sem esperar 60 s
+        self.assertEqual((r[0]["value"], self.auto.mode), (90, "lan"))
+        with self.assertRaises(MiioError):                          # comando não é repetido pela LAN aqui
+            self.auto._lan_down_until = 1e18
+            self.auto.send("action", {"did": "x", "siid": 2, "aiid": 16, "in": []})
+
     def test_without_cloud_raises(self):
         a = AutoClient(self.lan, None)
         self.lan.offline = True

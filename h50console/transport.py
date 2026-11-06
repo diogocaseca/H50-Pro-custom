@@ -54,7 +54,7 @@ class CloudClient:
         from .cloud import CloudError
         try:
             res = self.service.api(path, data, did=self.did)
-        except CloudError as ex:
+        except (CloudError, OSError) as ex:              # OSError: sem internet (DNS, conexão recusada, timeout)
             raise MiioError(f"nuvem: {ex}") from ex
         if res.get("code") not in (0, None):
             raise MiioError(f"nuvem code {res.get('code')}: {res.get('message', '')}")
@@ -203,7 +203,23 @@ class AutoClient:
         if self.cloud_client is None:
             raise MiioError("sem transporte disponível")
         self.mode = "cloud"
-        return self.cloud_client.send(method, params, retry)
+        try:
+            return self.cloud_client.send(method, params, retry)
+        except MiioError as cloud_err:
+            # sem internet a nuvem também falha: numa leitura (sem efeito colateral) tenta a LAN de novo antes de
+            # desistir. Comandos não repetem aqui; o wake_lan já sondou a LAN antes deles.
+            if method != "get_properties":
+                raise
+            try:
+                with self._lan_timeout(LAN_READ_TIMEOUT):
+                    res = self.lan_client.send(method, params, retry=retry)
+            except MiioError:
+                raise cloud_err from None
+            with self._lock:
+                self._lan_down_until = 0.0
+                self.mode = "lan"
+            log.info("nuvem sem resposta (%s), mas a LAN respondeu; saindo do modo nuvem", cloud_err)
+            return res
 
     def handshake(self) -> None:
         self.lan_client.handshake()
