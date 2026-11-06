@@ -85,15 +85,19 @@
         ...d.changes.map((c) => ({ ts: c.ts, kind: "change", prop: c.prop, name: c.name, old: c.old, new: c.new })),
       ].sort((a, b) => b.ts.localeCompare(a.ts));
       Table.render(out, [
-        { key: "ts", label: "Quando", render: (r) => new Date(r.ts).toLocaleTimeString("pt-BR"), sortValue: (r) => r.ts },
+        { key: "ts", label: "Quando", render: (r) => minutes > 1440 ? new Date(r.ts).toLocaleString("pt-BR")
+          : new Date(r.ts).toLocaleTimeString("pt-BR"), sortValue: (r) => r.ts },
         { key: "prop", label: "Propriedade", render: (r) => r.kind === "note" ? el("strong", { textContent: "Anotação" })
           : el("span", {}, r.prop, el("span", { className: "muted small", textContent: r.name ? ` ${r.name}` : "" })) },
         { key: "old", label: "Antes" },
         { key: "new", label: "Depois" },
       ], rows, { rowClass: (r) => r.kind === "note" ? "flash" : "", sort: "ts", desc: true, filters: false });
-      timer = setTimeout(() => location.hash === "#laboratorio" && tab === "changes" && render().catch(() => {}), 5000);
+      if (d.truncated) out.prepend(el("p", { className: "muted small", textContent: `Mostrando só as ${d.changes.length} mudanças mais recentes da janela.` }));
+      clearTimeout(timer);
+      // janelas de dias não se atualizam sozinhas (a consulta é grande e o que interessa já passou)
+      if (minutes <= 1440) timer = setTimeout(() => location.hash === "#laboratorio" && tab === "changes" && render().catch(() => {}), 5000);
     };
-    const range = el("select", {}, ...[[15, "15 min"], [60, "1 h"], [240, "4 h"], [1440, "24 h"]]
+    const range = el("select", {}, ...[[15, "15 min"], [60, "1 h"], [240, "4 h"], [1440, "24 h"], [4320, "3 dias"], [10080, "7 dias"]]
       .map(([v, l]) => el("option", { value: v, textContent: l, selected: v === minutes })));
     range.onchange = () => { minutes = Number(range.value); render(); };
     const noise = el("input", { type: "checkbox" });
@@ -104,7 +108,7 @@
       el("p", { className: "muted small", textContent: "Faça uma mudança no app oficial, anote aqui e veja quais propriedades mexeram logo depois: é assim que se descobre o que cada opção do app grava no robô." }),
       toolbar(note, btn("Marcar agora", add, "primary")),
       toolbar(el("label", {}, "Janela ", range), el("label", {}, noise, " mostrar o que muda sozinho (progresso, bateria…)"),
-        el("span", { className: "muted small", textContent: "atualiza a cada 5 s" })), out);
+        el("span", { className: "muted small", textContent: "atualiza a cada 5 s (janelas até 24 h)" })), out);
     await render();
   }
 

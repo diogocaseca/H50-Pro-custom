@@ -185,9 +185,17 @@ class Store:
         marks = ",".join("?" * len(props))
         return self._exec(f"DELETE FROM prop_change WHERE ts < ? AND prop IN ({marks})", (cutoff, *props)).rowcount
 
-    def changes_since(self, since_iso: str, limit: int = 600) -> list[dict]:
-        return self._query("SELECT ts, prop, old_value, new_value FROM prop_change WHERE ts >= ? ORDER BY id DESC LIMIT ?",
-                           (since_iso, limit))
+    def changes_since(self, since_iso: str, limit: int = 600, exclude=(), skip_initial: bool = False) -> list[dict]:
+        """Mudanças desde `since_iso`, as mais novas primeiro. `exclude` e `skip_initial` (leitura inicial, antes = nada)
+        filtram no SQL, antes do LIMIT: senão as props que mudam sozinhas ocupam o limite e escondem o resto."""
+        where, args = ["ts >= ?"], [since_iso]
+        if exclude:
+            where.append(f"prop NOT IN ({','.join('?' * len(exclude))})")
+            args += list(exclude)
+        if skip_initial:
+            where.append("old_value IS NOT NULL")
+        return self._query(f"SELECT ts, prop, old_value, new_value FROM prop_change WHERE {' AND '.join(where)} "
+                           "ORDER BY id DESC LIMIT ?", (*args, limit))
 
     def add_note(self, text: str) -> None:
         self._exec("INSERT INTO note (ts, text) VALUES (?, ?)", (iso(), text))

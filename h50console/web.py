@@ -362,16 +362,18 @@ class App:
         snap = self.gw.cache.snapshot()
         return {"via": self.gw.via, "values": {k: self._short(snap[k]) for k in keys if k in snap}}
 
+    LAB_CHANGES_LIMIT = 3000
+
     def lab_changes(self, query, **_):
-        minutes = max(1, min(1440, int(query.get("minutes", [60])[0])))
+        minutes = max(1, min(7 * 1440, int(query.get("minutes", [60])[0])))      # até 7 dias
         noisy = query.get("noisy", ["0"])[0] in ("1", "true")
         since = (datetime.now(timezone.utc) - __import__("datetime").timedelta(minutes=minutes)).isoformat(timespec="seconds")
         # leitura inicial (antes = nada) não é mudança: o app a registra toda vez que sobe
-        rows = [r for r in self.store.changes_since(since)
-                if noisy or (r["prop"] not in catalog.NOISY_PROPS and r["old_value"] is not None)]
+        rows = self.store.changes_since(since, self.LAB_CHANGES_LIMIT, exclude=() if noisy else sorted(catalog.NOISY_PROPS),
+                                        skip_initial=not noisy)
         changes = [{"ts": r["ts"], "prop": r["prop"], "name": catalog.PROPS[r["prop"]].name if r["prop"] in catalog.PROPS else "",
                     "old": self._short(r["old_value"]), "new": self._short(r["new_value"])} for r in rows]
-        return {"changes": changes, "notes": self.store.notes(since)}
+        return {"changes": changes, "notes": self.store.notes(since), "truncated": len(rows) >= self.LAB_CHANGES_LIMIT}
 
     def lab_note(self, body, **_):
         text = str((body or {}).get("text", "")).strip()[:200]

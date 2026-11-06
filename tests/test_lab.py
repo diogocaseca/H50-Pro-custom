@@ -80,6 +80,17 @@ class Lab(unittest.TestCase):
         with self.assertRaises(ApiError):
             self.call("POST", "/lab/notes", body={"text": "   "})
 
+    def test_noise_does_not_hide_older_changes_and_window_goes_to_7_days(self):
+        st = self.robot.store
+        st.save_changes({"2/42": ("a", "b")})
+        for i in range(700):                                               # muito ruído depois (progresso da limpeza)
+            st.save_changes({"2/89": (i, i + 1)})
+        out = self.call("GET", "/lab/changes", {"minutes": ["10080"]})
+        self.assertEqual([c["prop"] for c in out["changes"]], ["2/42"])    # o filtro vem antes do limite
+        self.assertFalse(out["truncated"])
+        st._exec("UPDATE prop_change SET ts = '2000-01-01T00:00:00+00:00' WHERE prop = '2/42'")
+        self.assertEqual(self.call("GET", "/lab/changes", {"minutes": ["99999"]})["changes"], [])   # máximo: 7 dias
+
     def test_action_risk_classification(self):
         risk = {a["key"]: a["risk"] for a in self.call("GET", "/lab/actions")}
         self.assertEqual(risk["2/30"], "safe")                          # get-system-info
