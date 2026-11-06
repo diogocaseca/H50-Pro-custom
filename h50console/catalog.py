@@ -288,6 +288,12 @@ CONSUMABLE_PROPS = {  # item -> (prop de %, prop de horas restantes)
     "filter": ("14/1", "14/2"), "detergent": ("18/1", "18/4"), "dust_bag": ("19/1", "19/2"),
 }
 
+# Sem internet o robô responde texto vazio no que ele guarda com a nuvem (observado em 06/11/2026: cômodos, pisos e
+# mapas voltaram de "" quando a internet voltou; rotinas sumiram junto) e põe todos os consumíveis em 100 %. Nesses
+# casos o painel mantém o último valor conhecido (gateway.Gateway.read). Fora daqui o vazio é um valor de verdade
+# (2/66 "" = nenhuma falha ativa).
+CLOUD_BACKED_PROPS = {"2/16", "2/19", "2/42", "2/102", "10/5", "10/13", "23/1"}
+
 # Móveis (2/102 "type"). 1740 confirmado removendo a liteira no app; 1220/1400 inferidos pela
 # posição (sofá fora da borda da Sala -> rid 248; mesa dentro -> rid 3; 1400 = mesa, confirmado pelo dono). rid 248 = fora dos cômodos.
 FURNITURE_TYPES = {1220: "Sofá", 1400: "Mesa", 1740: "Liteira"}

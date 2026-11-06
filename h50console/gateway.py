@@ -96,6 +96,7 @@ class Gateway:
         self.poke = threading.Event()         # acorda o poller após um comando
         self.clock = time.monotonic
         self.pending_start: dict | None = None   # comando de limpeza aceito, esperando o robô sair da base
+        self.held_back: set[str] = set()         # props com o valor de "robô sem internet" ignorado agora
 
     # -- núcleo -------------------------------------------------------------------
     def _call(self, fn: Callable, *args, high: bool):
@@ -135,7 +136,32 @@ class Gateway:
     def read(self, keys: list[str]) -> dict[str, tuple[object, object]]:
         """Lê com prioridade baixa, atualiza o cache e devolve as mudanças."""
         values = self._call(self.dev.values, keys, high=False)
-        return self.cache.update(values)
+        return self.cache.update(self._without_offline_defaults(values))
+
+    def _hold(self, key: str, why: str) -> None:
+        if key not in self.held_back:
+            self.held_back.add(key)
+            log.warning("%s: %s (robô sem internet?); mantendo o último valor", key, why)
+
+    def _without_offline_defaults(self, values: dict[str, object]) -> dict[str, object]:
+        """Tira o que o robô sem internet devolve no lugar dos dados reais, se já houver um valor conhecido."""
+        out = dict(values)
+        for k in catalog.CLOUD_BACKED_PROPS & out.keys():
+            if isinstance(out[k], str) and not out[k].strip() and self.cache.get(k):
+                self._hold(k, "veio vazio")
+                del out[k]
+        pcts = [pct for pct, _ in catalog.CONSUMABLE_PROPS.values()]
+        if all(out.get(k) == 100 for k in pcts):
+            before = [self.cache.get(k) for k in pcts]
+            if any(isinstance(v, (int, float)) and v < 100 for v in before):   # todos de uma vez: não é uma troca
+                for k in (k for pair in catalog.CONSUMABLE_PROPS.values() for k in pair):
+                    if k in out:
+                        self._hold(k, "todos os consumíveis vieram em 100 %")
+                        del out[k]
+        for k in [k for k in self.held_back if k in out]:
+            self.held_back.discard(k)
+            log.info("%s: o robô voltou a mandar o valor real", k)
+        return out
 
     # -- comandos (UI/API) ----------------------------------------------------------
     def _check_start(self, name: str) -> None:
