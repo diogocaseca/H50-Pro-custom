@@ -87,9 +87,12 @@
   const CLEANING = new Set([4, 10, 16, 17]), PAUSED = new Set([5, 18]), RETURNING = new Set([6, 19, 20, 21, 24]);
   const BASE_MODE = { 0: "", 1: "Secando", 2: "Esvaziando o pó", 3: "Lavando o mop" };
   const DRYING_MINUTES = { 1: 120, 2: 180, 3: 240 };   // 2/31 Duração da secagem
-  // % da secagem: o H50 Pro deixa o 2/88 em 0; calcula pela duração (2/31) e minutos restantes (2/90). Ver decoders.drying_percent.
+  // % da secagem: o H50 Pro deixa o 2/88 em 0; vale o progresso do 2/18 (modo 1) e, sem ele, a conta pela duração (2/31)
+  // e minutos restantes (2/90). Ver decoders.drying_percent.
   function dryingPct() {
     if (V("2/88") > 0) return V("2/88");
+    const base = parse(V("2/18"), {});
+    if (base.mode === 1 && base.progress > 0) return Math.min(100, base.progress);
     const total = DRYING_MINUTES[V("2/31")], left = V("2/90");
     return total && typeof left === "number" ? Math.max(0, Math.min(100, Math.round((total - left) * 100 / total))) : null;
   }

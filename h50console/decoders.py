@@ -105,14 +105,23 @@ def _num(v):
 
 
 def drying_percent(values: dict) -> int | None:
-    """% da secagem dos mops. O H50 Pro deixa o 2/88 em 0 durante a secagem e só informa os minutos restantes
-    (2/90), então a conta usa a duração escolhida (2/31). Se o 2/88 vier preenchido, vale ele. Fora da secagem: 0;
-    secando sem dados para calcular: None."""
+    """% da secagem dos mops. O H50 Pro deixa o 2/88 em 0; durante a secagem o 2/18 traz {"mode":1,"progress":N}, e N
+    é a % (sobe de 1 a 100). O modo do 2/18 é que diz se está secando: interrompida (por uma limpeza, por exemplo), a
+    base sai do modo 1 mas o 2/90 (minutos restantes) fica com o último valor. Sem o 2/18, a conta usa os minutos
+    restantes e a duração escolhida (2/31). Se o 2/88 vier preenchido, vale ele. Fora da secagem: 0; secando sem dados
+    para calcular: None."""
     reported = _num(values.get("2/88"))
     if reported and reported > 0:
         return reported
+    base = parse_json(values.get("2/18"), None)
     left = _num(values.get("2/90"))
-    if base_status(values.get("2/18"))["mode"] != 1 and not (left and left > 0):
+    if isinstance(base, dict) and "mode" in base:
+        if base["mode"] != 1:
+            return 0
+        progress = _num(base.get("progress"))
+        if progress and progress > 0:
+            return max(0, min(100, round(progress)))
+    elif not (left and left > 0):
         return 0
     total = DRYING_MINUTES.get(values.get("2/31"))
     if not total or left is None:

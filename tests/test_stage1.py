@@ -119,6 +119,11 @@ class Decoders(unittest.TestCase):
         self.assertEqual(decoders.drying_percent({"2/18": secando, "2/88": 40, "2/31": 2, "2/90": 10}), 40)  # vale o informado
         self.assertEqual(decoders.drying_percent({"2/18": '{"mode":0}', "2/88": 0, "2/31": 2, "2/90": 0}), 0)
         self.assertIsNone(decoders.drying_percent({"2/18": secando, "2/31": 9, "2/90": 30}))
+        # o progresso do 2/18 é a % da secagem (observado em 11/11/2026: 1 a 100 ao longo da secagem)
+        self.assertEqual(decoders.drying_percent({"2/18": '{"mode":1,"progress":16}', "2/31": 2, "2/90": 150}), 16)
+        # interrompida por uma limpeza: a base sai do modo 1 e o 2/90 fica com o último valor
+        self.assertEqual(decoders.drying_percent({"2/18": '{"mode":0,"progress":0}', "2/31": 2, "2/90": 150}), 0)
+        self.assertEqual(decoders.drying_percent({"2/18": '{"mode":3,"progress":40}', "2/90": 150}), 0)   # lavando o mop
 
 
 class Batching(unittest.TestCase):
